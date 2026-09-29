@@ -4,7 +4,7 @@ A full-text search engine written from scratch in Go. It builds an inverted inde
 results with BM25, and speeds up top-k retrieval with dynamic pruning (WAND and Block-Max WAND).
 It is evaluated on the public MS MARCO and BEIR benchmarks against published BM25 baselines.
 
-**Status:** early development. Indexing and search are not implemented yet.
+**Status:** basic in-memory search works. On-disk indexing, evaluation, and pruning are not implemented yet.
 
 ## Requirements
 
@@ -16,8 +16,12 @@ It is evaluated on the public MS MARCO and BEIR benchmarks against published BM2
 ```sh
 git clone https://github.com/ethantao14/quarry.git
 cd quarry
-go run ./cmd/quarry-search --version
+go build -o bin/quarry-search ./cmd/quarry-search
+./bin/quarry-search --corpus cmd/quarry-search/testdata/tiny.jsonl --k 2 fish
 ```
+
+Use a BEIR JSONL corpus with `_id`, `title`, and `text` fields. Results are tab-separated:
+`rank` (1-based), `external document ID`, and `score` (four decimal places).
 
 ## Development
 

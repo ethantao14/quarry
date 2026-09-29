@@ -7,6 +7,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
+
+	"github.com/ethantao14/quarry/internal/analysis"
+	"github.com/ethantao14/quarry/internal/query"
+	"github.com/ethantao14/quarry/internal/scoring"
 )
 
 const version = "dev"
@@ -23,6 +28,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("quarry-search", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	showVersion := flags.Bool("version", false, "print the version and exit")
+	corpusPath := flags.String("corpus", "", "path to a BEIR JSONL corpus")
+	k := flags.Int("k", 10, "number of results to return")
 
 	err := flags.Parse(args)
 	if errors.Is(err, flag.ErrHelp) {
@@ -36,5 +43,34 @@ func run(args []string, stdout, stderr io.Writer) error {
 		_, err := fmt.Fprintf(stdout, "quarry-search %s\n", version)
 		return err
 	}
-	return errors.New("search is not implemented yet")
+	if *corpusPath == "" {
+		return errors.New("--corpus is required")
+	}
+	if *k < 1 {
+		return errors.New("--k must be at least 1")
+	}
+	queryTerms := analysis.Tokenize(strings.Join(flags.Args(), " "))
+	if len(queryTerms) == 0 {
+		return errors.New("query must contain at least one term")
+	}
+
+	file, err := os.Open(*corpusPath)
+	if err != nil {
+		return fmt.Errorf("open corpus: %w", err)
+	}
+	ix, err := loadCorpus(file)
+	closeErr := file.Close()
+	if err != nil {
+		return fmt.Errorf("load corpus: %w", err)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close corpus: %w", closeErr)
+	}
+	results := query.Exhaustive(ix, scoring.DefaultBM25(), queryTerms, *k)
+	for i, result := range results {
+		if _, err := fmt.Fprintf(stdout, "%d\t%s\t%.4f\n", i+1, ix.ExternalID(result.DocID), result.Score); err != nil {
+			return err
+		}
+	}
+	return nil
 }
