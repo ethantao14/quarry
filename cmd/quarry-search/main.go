@@ -9,7 +9,7 @@ import (
 	"os"
 )
 
-const   version = "dev"
+const version = "dev"
 
 func main() {
 	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
