@@ -1,0 +1,22 @@
+# Datasets and built indexes (large, downloaded or generated locally)
+data/
+indexes/
+*.idx
+
+# Compiled binaries
+bin/
+/quarry-*
+
+# Test and profiling output
+*.test
+*.out
+*.prof
+coverage.*
+
+# Assistant tooling
+.claude/
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
