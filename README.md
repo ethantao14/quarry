@@ -22,7 +22,7 @@ go run ./cmd/quarry-search --version
 ## Development
 
 ```sh
-make build   # compile everything
+make build   # compile everything into bin/
 make test    # run tests with the race detector
 make lint    # go vet and golangci-lint
 make check   # all of the above, same as CI

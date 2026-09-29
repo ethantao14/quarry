@@ -1,7 +1,7 @@
 .PHONY: build test lint fmt check
 
 build:
-	go build ./...
+	go build -o bin/ ./...
 
 # -v lists every test as PASS, FAIL, or SKIP (with its reason).
 test:
