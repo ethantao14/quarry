@@ -18,9 +18,14 @@ The pipeline, in order:
    - `.` `'` `:` stay inside a word when they sit between two letters (`u.s.a`, `don't`).
    - `.` `,` `;` `'` stay inside a number when they sit between two digits (`3.5`, `1,000`).
    - `_` joins word parts (`foo_bar`). Combining marks stay attached (`é` written as `e` + accent).
-   - Chinese characters and Hiragana become one token per character.
-   - `©`, `®`, and `™` become tokens of their own.
-   - Tokens longer than 255 characters are split into 255-character pieces.
+   - Chinese characters and Hiragana become one token per character. Roman numerals (`Ⅳ`) and
+     circled letters (`Ⓐ`) count as letters.
+   - `©`, `®`, and `™` become tokens of their own, keeping a following emoji selector (`©️`).
+   - A token is matched within at most 255 characters. A longer run is cut at the last point in
+     that window where a token may end, and scanning resumes right after it, so a stray `.` or
+     accent at the cut is dropped, as in Lucene.
+   - A Hebrew letter may keep a trailing `'`, and two Hebrew letters may be joined by `"`
+     (`ו"ל`), following the same unit rules as Lucene's grammar.
 2. **Remove a possessive** `'s` (also with `’` or `＇`): `dog's` becomes `dog`.
 3. **Lowercase** each character.
 4. **Remove stopwords**: Lucene's 33-word English list (`a`, `the`, `of`, ...).
@@ -48,13 +53,17 @@ on all 69,904 words.
   and test query of SciFact and NFCorpus. Every line matches except one SciFact document (see below).
   Our total term counts are 838,126 (SciFact) and 637,485 (NFCorpus); Anserini's published index
   statistics are 838,128 and 637,485.
+- **Randomized check:** 10,000 random strings built from the tricky characters above (mid
+  characters, accents, symbols, Hebrew, Han, runs of up to 300 repeated characters) were compared
+  with Lucene. Every mismatch falls into one of the known differences below.
 
 ### Known differences from Lucene
 
 | Difference | Effect on our benchmarks |
 |------------|--------------------------|
-| Emoji (other than `©` `®` `™`) are dropped; Lucene keeps them as tokens, including multi-character sequences such as flags and skin tones. Go's standard library has no Unicode emoji property table. | 2 tokens (`↔`, in one SciFact document) out of 838,128 |
-| Character classes come from Go's Unicode categories, not the exact word-break property tables. Katakana next to Latin letters stays in one token; Lucene splits it. | None observed |
+| Emoji (other than `©` `®` `™`) are dropped; Lucene keeps them as tokens, including multi-character sequences such as flags, skin tones, and a zero-width joiner before a symbol. Go's standard library has no Unicode emoji property table. | 2 tokens (`↔`, in one SciFact document) out of 838,128 |
+| Character classes come from Go's Unicode categories, not the exact word-break property tables. Katakana next to other letters stays in one token (Lucene splits it), and `〆` is kept (Lucene drops it). | None observed |
+| A run of 255 or more underscores: Lucene's fixed-size scan buffer produces odd tokens here (for example, a token of only underscores). We do not imitate this. | None observed |
 | The 255 limit counts characters; Lucene counts UTF-16 units, so they differ only for characters outside the Basic Multilingual Plane. The same applies to the Porter stemmer's rule of leaving words of one or two characters unchanged. | None observed |
 
 ## Scoring

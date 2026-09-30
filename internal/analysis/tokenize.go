@@ -18,18 +18,22 @@ const (
 const maxTokenLength = 255
 
 // Tokenize splits text into raw Unicode tokens of at most 255 runes.
+// Like Lucene, a token is matched within a 255-rune window starting at its first
+// rune; scanning then resumes right after the token.
 func Tokenize(text string) []string {
 	runes := []rune(text)
 	var tokens []string
 	for start := 0; start < len(runes); {
+		limit := min(start+maxTokenLength, len(runes))
 		end := start + 1
 		switch classify(runes[start]) {
 		case ideograph:
-			end = skipExtends(runes, end)
+			end = skipExtends(runes, end, limit)
 		case symbol:
+			end = scanSymbol(runes, start, limit)
 		case letter, digit, connector:
 			var hasBase bool
-			end, hasBase = scanWord(runes, start)
+			end, hasBase = scanWord(runes, start, limit)
 			if !hasBase {
 				start = end
 				continue
@@ -38,55 +42,77 @@ func Tokenize(text string) []string {
 			start = end
 			continue
 		}
-		for start < end {
-			pieceEnd := min(start+maxTokenLength, end)
-			tokens = append(tokens, string(runes[start:pieceEnd]))
-			start = pieceEnd
-		}
+		tokens = append(tokens, string(runes[start:end]))
+		start = end
 	}
 	return tokens
 }
 
-// scanWord returns where the word starting at runes[start] ends, and whether it
-// contains a letter or digit (a run of only connectors is not a token).
-func scanWord(runes []rune, start int) (int, bool) {
+// scanSymbol returns where the symbol token starting at runes[start] ends. It keeps
+// following extend runes, then one optional emoji presentation selector (U+FE0F).
+func scanSymbol(runes []rune, start, limit int) int {
+	end := start + 1
+	for end < limit && classify(runes[end]) == extend && !isVariationSelector(runes[end]) {
+		end++
+	}
+	if end < limit && runes[end] == '\uFE0F' {
+		end++
+	}
+	return end
+}
+
+// scanWord returns where the word starting at runes[start] ends, looking no further
+// than limit, and whether it contains a letter or digit (a run of only connectors
+// is not a token).
+func scanWord(runes []rune, start, limit int) (int, bool) {
 	lastKind := separator
 	var lastBase rune
 	hasBase := false
-	for pos := start; pos < len(runes); pos++ {
+	// A Hebrew letter only takes a quote when it was not itself joined on by a
+	// mid character (Lucene's grammar treats "b'א'" differently from "א'").
+	afterMid, lastBaseAfterMid := false, false
+	// The letter after a Hebrew double quote ends that unit; mids cannot extend it.
+	afterDoubleQuote, lastBaseAfterDoubleQuote := false, false
+	for pos := start; pos < limit; pos++ {
 		kind := classify(runes[pos])
 		switch kind {
 		case letter, digit, connector:
 			lastKind = kind
 			lastBase = runes[pos]
+			lastBaseAfterMid, afterMid = afterMid, false
+			lastBaseAfterDoubleQuote, afterDoubleQuote = afterDoubleQuote, false
 			if kind == letter || kind == digit {
 				hasBase = true
 			}
 		case extend:
 		default:
-			if runes[pos] == '\'' && isHebrewLetter(lastBase) {
+			startsHebrewUnit := isHebrewLetter(lastBase) && !lastBaseAfterMid
+			if runes[pos] == '\'' && startsHebrewUnit {
 				lastKind = separator
 				lastBase = 0
 				continue
 			}
-			next := skipExtends(runes, pos+1)
-			if next == len(runes) {
+			next := skipExtends(runes, pos+1, limit)
+			if next >= limit {
 				return pos, hasBase
 			}
-			joinsLetters := lastKind == letter && classify(runes[next]) == letter && isMidLetter(runes[pos])
+			joinsLetters := lastKind == letter && !lastBaseAfterDoubleQuote &&
+				classify(runes[next]) == letter && isMidLetter(runes[pos])
 			joinsDigits := lastKind == digit && classify(runes[next]) == digit && isMidNum(runes[pos])
-			joinsHebrew := runes[pos] == '"' && isHebrewLetter(lastBase) && isHebrewLetter(runes[next])
+			joinsHebrew := runes[pos] == '"' && startsHebrewUnit && isHebrewLetter(runes[next])
 			if !joinsLetters && !joinsDigits && !joinsHebrew {
 				return pos, hasBase
 			}
+			afterMid = true
+			afterDoubleQuote = joinsHebrew
 			pos = next - 1
 		}
 	}
-	return len(runes), hasBase
+	return limit, hasBase
 }
 
-func skipExtends(runes []rune, pos int) int {
-	for pos < len(runes) && classify(runes[pos]) == extend {
+func skipExtends(runes []rune, pos, limit int) int {
+	for pos < limit && classify(runes[pos]) == extend {
 		pos++
 	}
 	return pos
@@ -96,7 +122,7 @@ func classify(r rune) runeKind {
 	switch {
 	case unicode.Is(unicode.Han, r) || unicode.Is(unicode.Hiragana, r):
 		return ideograph
-	case unicode.IsLetter(r):
+	case unicode.IsLetter(r) || unicode.Is(unicode.Nl, r) || isCircledLetter(r):
 		return letter
 	case unicode.IsDigit(r):
 		return digit
@@ -130,6 +156,17 @@ func isMidNum(r rune) bool {
 	default:
 		return false
 	}
+}
+
+// isCircledLetter reports whether r is a circled Latin letter (Ⓐ to ⓩ), which
+// Unicode word breaking treats as a letter although its category is a symbol.
+func isCircledLetter(r rune) bool {
+	return r >= 'Ⓐ' && r <= 'ⓩ'
+}
+
+// isVariationSelector reports whether r selects text (U+FE0E) or emoji (U+FE0F) style.
+func isVariationSelector(r rune) bool {
+	return r == '\uFE0E' || r == '\uFE0F'
 }
 
 func isHebrewLetter(r rune) bool {

@@ -11,6 +11,7 @@ import (
 // Each must still differ; if one starts matching, remove it from this list.
 var knownDifferences = map[string]string{
 	"emoji 😀 test 👍🏽 thumbs ❤️ heart 🇺🇸 flag 1️⃣ keycap": "emoji tokens are not supported; see docs/DESIGN.md",
+	"\u3006": "Go classes U+3006 as a letter; Unicode word breaking does not; see docs/DESIGN.md",
 }
 
 // TestAnalyzeMatchesLucene compares Analyze with real Lucene output.
