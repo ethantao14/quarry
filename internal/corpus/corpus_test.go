@@ -1,4 +1,4 @@
-package main
+package corpus
 
 import (
 	"slices"
@@ -8,7 +8,7 @@ import (
 	"github.com/ethantao14/quarry/internal/index"
 )
 
-func TestLoadCorpus(t *testing.T) {
+func TestLoad(t *testing.T) {
 	tests := []struct {
 		name    string
 		input   string
@@ -31,15 +31,15 @@ func TestLoadCorpus(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ix, err := loadCorpus(strings.NewReader(tt.input))
+			ix, err := Load(strings.NewReader(tt.input))
 			if tt.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-					t.Fatalf("loadCorpus(%q) error = %v, want %q", tt.input, err, tt.wantErr)
+					t.Fatalf("Load(%q) error = %v, want %q", tt.input, err, tt.wantErr)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("loadCorpus(%q) error = %v, want nil", tt.input, err)
+				t.Fatalf("Load(%q) error = %v, want nil", tt.input, err)
 			}
 			if got := ix.DocCount(); got != len(tt.wantIDs) {
 				t.Fatalf("DocCount() = %d, want %d", got, len(tt.wantIDs))
@@ -53,10 +53,10 @@ func TestLoadCorpus(t *testing.T) {
 	}
 }
 
-func TestLoadCorpusTokenizesTitleAndText(t *testing.T) {
-	ix, err := loadCorpus(strings.NewReader(`{"_id":"a","title":"RED","text":"Fish fish!"}`))
+func TestLoadTokenizesTitleAndText(t *testing.T) {
+	ix, err := Load(strings.NewReader(`{"_id":"a","title":"RED","text":"Fish fish!"}`))
 	if err != nil {
-		t.Fatalf("loadCorpus() error = %v, want nil", err)
+		t.Fatalf("Load() error = %v, want nil", err)
 	}
 	tests := []struct {
 		term string

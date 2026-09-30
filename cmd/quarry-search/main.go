@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/ethantao14/quarry/internal/analysis"
+	"github.com/ethantao14/quarry/internal/corpus"
 	"github.com/ethantao14/quarry/internal/query"
 	"github.com/ethantao14/quarry/internal/scoring"
 )
@@ -54,17 +55,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return errors.New("query must contain at least one term")
 	}
 
-	file, err := os.Open(*corpusPath)
+	ix, err := corpus.LoadFile(*corpusPath)
 	if err != nil {
-		return fmt.Errorf("open corpus: %w", err)
-	}
-	ix, err := loadCorpus(file)
-	closeErr := file.Close()
-	if err != nil {
-		return fmt.Errorf("load corpus: %w", err)
-	}
-	if closeErr != nil {
-		return fmt.Errorf("close corpus: %w", closeErr)
+		return err
 	}
 	results := query.Exhaustive(ix, scoring.DefaultBM25(), queryTerms, *k)
 	for i, result := range results {

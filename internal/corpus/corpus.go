@@ -1,18 +1,20 @@
-package main
+// Package corpus reads benchmark document collections into an index.
+package corpus
 
 import (
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"os"
 
 	"github.com/ethantao14/quarry/internal/analysis"
 	"github.com/ethantao14/quarry/internal/index"
 )
 
-// loadCorpus indexes a BEIR-format JSONL corpus, one {"_id", "title", "text"} object per line.
+// Load indexes a BEIR-format JSONL corpus, one {"_id", "title", "text"} object per line.
 // Title and text are indexed together as one field.
-func loadCorpus(r io.Reader) (*index.Index, error) {
+func Load(r io.Reader) (*index.Index, error) {
 	ix := index.New()
 	decoder := json.NewDecoder(r)
 	for recordNumber := 1; ; recordNumber++ {
@@ -33,4 +35,20 @@ func loadCorpus(r io.Reader) (*index.Index, error) {
 		}
 		ix.Add(record.ID, analysis.Tokenize(record.Title+" "+record.Text))
 	}
+}
+
+// LoadFile opens a corpus file and indexes it with Load.
+func LoadFile(path string) (*index.Index, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("open corpus: %w", err)
+	}
+	// The file is only read, so a failed Close cannot lose data.
+	defer func() { _ = file.Close() }()
+
+	ix, err := Load(file)
+	if err != nil {
+		return nil, fmt.Errorf("load corpus %s: %w", path, err)
+	}
+	return ix, nil
 }
