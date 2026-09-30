@@ -1,6 +1,7 @@
 # Datasets and built indexes (large, downloaded or generated locally)
 data/
 indexes/
+runs/
 *.idx
 
 # Compiled binaries
