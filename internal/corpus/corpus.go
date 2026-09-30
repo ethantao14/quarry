@@ -33,7 +33,7 @@ func Load(r io.Reader) (*index.Index, error) {
 		if record.ID == "" {
 			return nil, fmt.Errorf("record %d: _id is empty", recordNumber)
 		}
-		ix.Add(record.ID, analysis.Tokenize(record.Title+" "+record.Text))
+		ix.Add(record.ID, analysis.Analyze(record.Title+" "+record.Text))
 	}
 }
 

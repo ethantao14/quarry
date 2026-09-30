@@ -50,7 +50,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	if *k < 1 {
 		return errors.New("--k must be at least 1")
 	}
-	queryTerms := analysis.Tokenize(strings.Join(flags.Args(), " "))
+	queryTerms := analysis.Analyze(strings.Join(flags.Args(), " "))
 	if len(queryTerms) == 0 {
 		return errors.New("query must contain at least one term")
 	}

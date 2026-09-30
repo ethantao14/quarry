@@ -113,7 +113,7 @@ func writeRun(path string, ix *index.Index, queries map[string]string, qrels eva
 	defer func() { _ = file.Close() }()
 
 	for _, queryID := range queryIDs {
-		terms := analysis.Tokenize(queries[queryID])
+		terms := analysis.Analyze(queries[queryID])
 		results := query.Exhaustive(ix, scoring.DefaultBM25(), terms, k)
 		entries := make([]eval.RunEntry, len(results))
 		for i, result := range results {
