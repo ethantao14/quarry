@@ -4,6 +4,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/ethantao14/quarry/internal/postings"
 )
 
 func TestAdd(t *testing.T) {
@@ -25,15 +27,19 @@ func TestAdd(t *testing.T) {
 
 	postingTests := []struct {
 		term string
-		want []Posting
+		want []postings.Posting
 	}{
-		{"fish", []Posting{{DocID: 0, TF: 2}, {DocID: 1, TF: 1}}},
-		{"red", []Posting{{DocID: 0, TF: 1}, {DocID: 2, TF: 1}}},
-		{"car", []Posting{{DocID: 2, TF: 1}}},
+		{"fish", []postings.Posting{{DocID: 0, TF: 2}, {DocID: 1, TF: 1}}},
+		{"red", []postings.Posting{{DocID: 0, TF: 1}, {DocID: 2, TF: 1}}},
+		{"car", []postings.Posting{{DocID: 2, TF: 1}}},
 		{"missing", nil},
 	}
 	for _, tt := range postingTests {
-		if got := ix.Postings(tt.term); !slices.Equal(got, tt.want) {
+		got, err := ix.Postings(tt.term)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(got, tt.want) {
 			t.Errorf("Postings(%q) = %v, want %v", tt.term, got, tt.want)
 		}
 	}

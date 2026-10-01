@@ -2,7 +2,10 @@ package main
 
 import (
 	"bytes"
+	"path/filepath"
 	"testing"
+
+	"github.com/ethantao14/quarry/internal/corpus"
 )
 
 func TestRun(t *testing.T) {
@@ -22,6 +25,8 @@ func TestRun(t *testing.T) {
 		{name: "empty query", args: []string{"--corpus", "testdata/tiny.jsonl"}, wantErr: true},
 		{name: "punctuation query", args: []string{"--corpus", "testdata/tiny.jsonl", "!?"}, wantErr: true},
 		{name: "nonexistent corpus", args: []string{"--corpus", "testdata/nonexistent.jsonl", "fish"}, wantErr: true},
+		{name: "nonexistent index", args: []string{"--index", "testdata/nonexistent", "fish"}, wantErr: true},
+		{name: "corpus and index", args: []string{"--corpus", "testdata/tiny.jsonl", "--index", "testdata/nonexistent", "fish"}, wantErr: true},
 		{name: "no matches", args: []string{"--corpus", "testdata/tiny.jsonl", "missing"}},
 		{
 			name:       "real query",
@@ -52,5 +57,39 @@ func TestRun(t *testing.T) {
 				t.Errorf("run(%q) stdout = %q, want %q", tt.args, got, tt.wantStdout)
 			}
 		})
+	}
+}
+
+// A saved index must print exactly what searching the corpus prints.
+func TestRunIndexMatchesCorpus(t *testing.T) {
+	ix, err := corpus.LoadFile("testdata/tiny.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexPath := filepath.Join(t.TempDir(), "idx")
+	if err := ix.Write(indexPath); err != nil {
+		t.Fatal(err)
+	}
+
+	bothArgs := []string{"--corpus", "testdata/tiny.jsonl", "--index", indexPath, "fish"}
+	var stdout, stderr bytes.Buffer
+	if err := run(bothArgs, &stdout, &stderr); err == nil || err.Error() != "--corpus and --index cannot both be set" {
+		t.Errorf("run(%q) error = %v, want both flags rejected", bothArgs, err)
+	}
+
+	queries := [][]string{{"fish"}, {"--k", "2", "fish"}, {"missing", "fish"}, {"missing"}}
+	for _, queryArgs := range queries {
+		var fromCorpus, fromIndex bytes.Buffer
+		corpusArgs := append([]string{"--corpus", "testdata/tiny.jsonl"}, queryArgs...)
+		if err := run(corpusArgs, &fromCorpus, &stderr); err != nil {
+			t.Fatalf("run(%q) error = %v", corpusArgs, err)
+		}
+		indexArgs := append([]string{"--index", indexPath}, queryArgs...)
+		if err := run(indexArgs, &fromIndex, &stderr); err != nil {
+			t.Fatalf("run(%q) error = %v", indexArgs, err)
+		}
+		if fromIndex.String() != fromCorpus.String() {
+			t.Errorf("run(%q) stdout = %q, want %q", indexArgs, fromIndex.String(), fromCorpus.String())
+		}
 	}
 }

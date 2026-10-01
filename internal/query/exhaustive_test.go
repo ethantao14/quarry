@@ -35,7 +35,10 @@ func TestExhaustive(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			results := Exhaustive(ix, scoring.DefaultBM25(), tt.terms, tt.k)
+			results, err := Exhaustive(ix, scoring.DefaultBM25(), tt.terms, tt.k)
+			if err != nil {
+				t.Fatal(err)
+			}
 			var got []uint32
 			for _, result := range results {
 				got = append(got, result.DocID)
@@ -51,8 +54,14 @@ func TestExhaustiveRepeatedTerm(t *testing.T) {
 	ix := index.New()
 	ix.Add("a", []string{"red", "red", "blue"})
 	ix.Add("b", []string{"red"})
-	single := Exhaustive(ix, scoring.DefaultBM25(), []string{"red"}, 10)
-	repeated := Exhaustive(ix, scoring.DefaultBM25(), []string{"red", "red"}, 10)
+	single, err := Exhaustive(ix, scoring.DefaultBM25(), []string{"red"}, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repeated, err := Exhaustive(ix, scoring.DefaultBM25(), []string{"red", "red"}, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(repeated) != len(single) || len(single) != 2 {
 		t.Fatalf("Exhaustive() lengths = %d, %d, want 2, 2", len(repeated), len(single))
 	}
@@ -84,7 +93,10 @@ func TestExhaustiveBruteForce(t *testing.T) {
 			terms[i] = queryVocabulary[random.IntN(len(queryVocabulary))]
 		}
 		for _, k := range []int{-1, 0, 1, 3, 10, 25} {
-			got := Exhaustive(ix, bm25, terms, k)
+			got, err := Exhaustive(ix, bm25, terms, k)
+			if err != nil {
+				t.Fatal(err)
+			}
 			want := bruteForce(docs, bm25, terms, k)
 			if len(got) != len(want) {
 				t.Fatalf("Exhaustive(%q, %d) length = %d, want %d", terms, k, len(got), len(want))
@@ -96,7 +108,11 @@ func TestExhaustiveBruteForce(t *testing.T) {
 			}
 			reversed := slices.Clone(terms)
 			slices.Reverse(reversed)
-			if reordered := Exhaustive(ix, bm25, reversed, k); !slices.Equal(reordered, got) {
+			reordered, err := Exhaustive(ix, bm25, reversed, k)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(reordered, got) {
 				t.Errorf("Exhaustive(%q, %d) = %v, want %v", reversed, k, reordered, got)
 			}
 		}

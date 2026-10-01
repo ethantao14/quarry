@@ -1,24 +1,33 @@
 package query
 
 import (
+	"fmt"
 	"sort"
 
-	"github.com/ethantao14/quarry/internal/index"
+	"github.com/ethantao14/quarry/internal/postings"
 	"github.com/ethantao14/quarry/internal/scoring"
 )
 
+// Index is what query processing needs from an index, in memory or on disk.
+type Index interface {
+	Postings(term string) ([]postings.Posting, error)
+	DocCount() int
+	DocLen(docID uint32) uint32
+	AvgDocLen() float64
+}
+
 type cursor struct {
-	postings []index.Posting
+	postings []postings.Posting
 	position int
 	count    int
 	idf      float64
 }
 
 // Exhaustive scores every matching document and returns the best k results.
-func Exhaustive(ix *index.Index, bm25 scoring.BM25, queryTerms []string, k int) []Result {
+func Exhaustive(ix Index, bm25 scoring.BM25, queryTerms []string, k int) ([]Result, error) {
 	top := NewTopK(k)
 	if k <= 0 {
-		return top.Results()
+		return top.Results(), nil
 	}
 	counts := make(map[string]int)
 	for _, term := range queryTerms {
@@ -33,14 +42,17 @@ func Exhaustive(ix *index.Index, bm25 scoring.BM25, queryTerms []string, k int) 
 
 	var cursors []cursor
 	for _, term := range terms {
-		postings := ix.Postings(term)
-		if len(postings) == 0 {
+		list, err := ix.Postings(term)
+		if err != nil {
+			return nil, fmt.Errorf("postings for %q: %w", term, err)
+		}
+		if len(list) == 0 {
 			continue
 		}
 		cursors = append(cursors, cursor{
-			postings: postings,
+			postings: list,
 			count:    counts[term],
-			idf:      scoring.IDF(ix.DocCount(), len(postings)),
+			idf:      scoring.IDF(ix.DocCount(), len(list)),
 		})
 	}
 
@@ -62,7 +74,7 @@ func Exhaustive(ix *index.Index, bm25 scoring.BM25, queryTerms []string, k int) 
 		}
 		top.Offer(Result{DocID: docID, Score: score})
 	}
-	return top.Results()
+	return top.Results(), nil
 }
 
 // nextDocID returns the smallest doc ID any cursor is on, or false if all are exhausted.
