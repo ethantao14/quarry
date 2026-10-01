@@ -31,6 +31,8 @@ scripts/download.sh scifact
 go run ./cmd/quarry-eval --dataset data/beir/scifact --run runs/scifact.trec --k 1000
 ```
 
+The same works for NFCorpus: replace `scifact` with `nfcorpus` in both commands.
+
 Output is tab-separated, with metrics printed to four decimal places:
 
 ```text
@@ -50,11 +52,14 @@ BM25 (k1=0.9, b=0.4), title and text indexed as one field, test split, 1000 resu
 Baselines are Anserini's published
 [BM25 flat regressions](https://github.com/castorini/anserini/tree/master/src/main/resources/reproduce/from-document-collection/configs).
 
-| Dataset | Metric  | quarry | Anserini |
-|---------|---------|-------:|---------:|
-| SciFact | nDCG@10 | 0.6777 | 0.6789   |
-| SciFact | R@100   | 0.9253 | 0.9253   |
-| SciFact | R@1000  | 0.9767 | 0.9767   |
+| Dataset  | Metric  | quarry | Anserini |
+|----------|---------|-------:|---------:|
+| SciFact  | nDCG@10 | 0.6777 | 0.6789   |
+| SciFact  | R@100   | 0.9253 | 0.9253   |
+| SciFact  | R@1000  | 0.9767 | 0.9767   |
+| NFCorpus | nDCG@10 | 0.3201 | 0.3218   |
+| NFCorpus | R@100   | 0.2456 | 0.2457   |
+| NFCorpus | R@1000  | 0.3702 | 0.3704   |
 
 Text is analyzed like Anserini's English analyzer (Lucene tokenization, possessive removal,
 lowercasing, stopwords, Porter stemming), verified token by token against real Lucene. The
