@@ -4,7 +4,8 @@ A full-text search engine written from scratch in Go. It builds an inverted inde
 results with BM25, and speeds up top-k retrieval with dynamic pruning (WAND and Block-Max WAND).
 It is evaluated on the public MS MARCO and BEIR benchmarks against published BM25 baselines.
 
-**Status:** basic in-memory search and evaluation work. On-disk indexing and pruning are not implemented yet.
+**Status:** in-memory search with English text analysis and evaluation work. On-disk indexing and
+pruning are not implemented yet.
 
 ## Requirements
 
@@ -51,11 +52,14 @@ Baselines are Anserini's published
 
 | Dataset | Metric  | quarry | Anserini |
 |---------|---------|-------:|---------:|
-| SciFact | nDCG@10 | 0.6618 | 0.6789   |
-| SciFact | R@100   | 0.8852 | 0.9253   |
-| SciFact | R@1000  | 0.9650 | 0.9767   |
+| SciFact | nDCG@10 | 0.6777 | 0.6789   |
+| SciFact | R@100   | 0.9253 | 0.9253   |
+| SciFact | R@1000  | 0.9767 | 0.9767   |
 
-quarry's analyzer does not yet remove stopwords or stem, which accounts for at least part of the gap.
+Text is analyzed like Anserini's English analyzer (Lucene tokenization, possessive removal,
+lowercasing, stopwords, Porter stemming), verified token by token against real Lucene. The
+remaining nDCG@10 gap most likely comes from Lucene's rounded document lengths. See
+[docs/DESIGN.md](docs/DESIGN.md) for details and every known difference.
 
 Our metrics match NIST [trec_eval](https://github.com/usnistgov/trec_eval) exactly on the SciFact run.
 To check it yourself, build trec_eval and run:
@@ -73,3 +77,7 @@ make test    # run tests with the race detector
 make lint    # go vet and golangci-lint
 make check   # all of the above, same as CI
 ```
+
+The analyzer's expected outputs in `internal/analysis/testdata/golden_lucene.txt` come from real
+Lucene. After editing `golden_inputs.txt`, regenerate them with `scripts/lucene-golden.sh`
+(needs Java 11 or newer; downloads Lucene into the ignored `data/` folder).
