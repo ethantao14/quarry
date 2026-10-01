@@ -29,7 +29,7 @@ func writeBenchIndex(b *testing.B) string {
 	return dir
 }
 
-// BenchmarkOpen measures opening and validating a saved index.
+// BenchmarkOpen measures opening, validating, and closing a saved index.
 // B/op is the heap memory each open allocates.
 func BenchmarkOpen(b *testing.B) {
 	dir := writeBenchIndex(b)
@@ -41,6 +41,9 @@ func BenchmarkOpen(b *testing.B) {
 		}
 		if disk.DocCount() != 100000 {
 			b.Fatalf("DocCount() = %d", disk.DocCount())
+		}
+		if err := disk.Close(); err != nil {
+			b.Fatal(err)
 		}
 	}
 }

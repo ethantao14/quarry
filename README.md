@@ -4,8 +4,8 @@ A full-text search engine written from scratch in Go. It builds an inverted inde
 results with BM25, and speeds up top-k retrieval with dynamic pruning (WAND and Block-Max WAND).
 It is evaluated on the public MS MARCO and BEIR benchmarks against published BM25 baselines.
 
-**Status:** English text analysis, BM25 search, evaluation, and saving an index to disk work.
-Memory-mapped reads, indexing at MS MARCO scale, and pruning are not implemented yet.
+**Status:** English text analysis, BM25 search, evaluation, and saving an index to disk (read back
+with memory mapping) work. Indexing at MS MARCO scale and pruning are not implemented yet.
 
 ## Requirements
 
@@ -34,7 +34,8 @@ go build -o bin/ ./cmd/...
 
 `quarry-index` prints the document count, distinct term count, and total index size in bytes. It
 refuses to overwrite an existing directory. Use exactly one of `--corpus` or `--index` when
-searching. Results from a saved index are identical to searching the corpus directly. The format is
+searching. Results from a saved index are identical to searching the corpus directly. Saved indexes
+are memory-mapped, which works on macOS and Linux. The format is
 described in [docs/DESIGN.md](docs/DESIGN.md#on-disk-index-format).
 
 ## Evaluation

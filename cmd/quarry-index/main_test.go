@@ -73,6 +73,11 @@ func TestRunWritesIndex(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
+	t.Cleanup(func() {
+		if err := disk.Close(); err != nil {
+			t.Errorf("Close() error = %v", err)
+		}
+	})
 	if disk.DocCount() != 3 {
 		t.Errorf("DocCount() = %d, want 3", disk.DocCount())
 	}

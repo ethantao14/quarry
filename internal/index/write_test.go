@@ -37,9 +37,11 @@ func TestWriteDirectory(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := Open(dir); err != nil {
+			disk, err := Open(dir)
+			if err != nil {
 				t.Fatal(err)
 			}
+			cleanupDisk(t, disk)
 		})
 	}
 }

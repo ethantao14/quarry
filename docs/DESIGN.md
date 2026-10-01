@@ -112,8 +112,33 @@ Choices and tradeoffs:
   The manifest is written last, so an interrupted build has no manifest and is rejected.
 - **No overwrites.** `quarry-index` refuses to write into an existing directory.
 
-Files are currently read fully into memory. Lookups already work directly on the raw bytes, so the next
-step can switch to memory-mapping the files without changing the format.
+### Memory-mapped reads
+
+`Open` memory-maps the four binary files (`mmap`, read-only) instead of copying them into the Go heap.
+Lookups read the mapped bytes directly. The operating system loads each 16 KB page (4 KB on most Linux
+machines) the first time it is touched, and keeps it in its page cache, which is shared memory it can
+evict and reload from disk when it needs room.
+
+What this means in practice:
+
+- **The Go heap stays small.** An index larger than free RAM can still be opened. Only the pages a query
+  touches need to be in memory, and the OS decides which ones to keep.
+- **Warm and cold queries differ.** The first query that touches a page waits for a disk read; later ones
+  hit the page cache. Benchmarks must say whether the cache was warm.
+- **Opening still reads every byte once,** because checksums are verified on open. That leaves the files
+  in the page cache, which helps the first queries. For a very large index, open time is then bounded by
+  disk speed; skipping or deferring verification is a possible later option.
+- **Nothing returned points into the mapping.** Postings are decoded into new memory and external IDs are
+  copied into strings, so results stay valid after `Close` unmaps the files.
+- **The files must not change while mapped.** Indexes are immutable, and `quarry-index` never overwrites
+  one. Truncating a mapped file would crash the reader.
+- **Unix only.** mmap uses the standard `syscall` package on macOS and Linux. On other platforms `Open`
+  returns an error instead of silently reading the files into memory.
+
+Measured with `go test ./internal/index -run '^$' -bench Open -benchtime 20x -count 5` (Apple M3, warm
+cache, synthetic 100,000-document index of 10.7 MB): opening went from 3.1 ms and 10.7 MB of heap per
+open (reading the files) to 1.75 ms and 5.4 KB (mapping them, including closing). On the 2 MB SciFact
+index, end-to-end search and evaluation time and peak memory did not measurably change.
 
 Searching a saved index gives exactly the same results as the in-memory index: the same documents and
 bit-identical scores. This is checked on 200 random corpora in the tests, and the run files for SciFact

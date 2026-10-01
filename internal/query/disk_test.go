@@ -36,6 +36,11 @@ func TestDiskMatchesMemory(t *testing.T) {
 		if err != nil {
 			t.Fatalf("seed %d: Open() error = %v", seed, err)
 		}
+		t.Cleanup(func() {
+			if err := disk.Close(); err != nil {
+				t.Errorf("Close() error = %v", err)
+			}
+		})
 
 		for queryNumber := 0; queryNumber < 20; queryNumber++ {
 			terms := make([]string, random.IntN(5)+1)
