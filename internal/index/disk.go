@@ -15,7 +15,8 @@ import (
 	"github.com/ethantao14/quarry/internal/postings"
 )
 
-// Disk reads an immutable index directly from its binary file bytes.
+// Disk reads an immutable index from memory-mapped binary files.
+// Its methods return owned data: Postings decodes into new memory and ExternalID copies into a string.
 type Disk struct {
 	dict       []byte
 	post       []byte
@@ -26,7 +27,8 @@ type Disk struct {
 	totalTerms uint64
 }
 
-// Open reads and validates an index directory without decoding its tables.
+// Open memory-maps and validates an index directory without decoding its tables.
+// Data returned by Disk methods does not point into the mappings. Call Close when done.
 func Open(dir string) (*Disk, error) {
 	data, err := os.ReadFile(filepath.Join(dir, manifestName))
 	if err != nil {
@@ -52,6 +54,13 @@ func Open(dir string) (*Disk, error) {
 		return nil, fmt.Errorf("%s: expected exactly four binary files", manifestName)
 	}
 	d := &Disk{docCount: m.DocCount, termCount: m.TermCount, totalTerms: m.TotalTerms}
+	opened := false
+	defer func() {
+		if !opened {
+			// Unmapping read-only files cannot lose data.
+			_ = d.Close()
+		}
+	}()
 	files := []struct {
 		name  string
 		magic string
@@ -67,10 +76,11 @@ func Open(dir string) (*Disk, error) {
 		if !ok {
 			return nil, fmt.Errorf("%s: missing %s", manifestName, file.name)
 		}
-		data, err := os.ReadFile(filepath.Join(dir, file.name))
+		data, err := mapFile(filepath.Join(dir, file.name))
 		if err != nil {
 			return nil, fmt.Errorf("read %s: %w", file.name, err)
 		}
+		*file.dst = data
 		if uint64(len(data)) != info.Size {
 			return nil, fmt.Errorf("%s: size mismatch", file.name)
 		}
@@ -86,7 +96,6 @@ func Open(dir string) (*Disk, error) {
 		if version := binary.LittleEndian.Uint32(data[4:8]); version != FormatVersion {
 			return nil, formatError(file.name, version)
 		}
-		*file.dst = data
 	}
 	if err := d.validateDict(); err != nil {
 		return nil, err
@@ -97,7 +106,21 @@ func Open(dir string) (*Disk, error) {
 	if err := d.validateIDs(); err != nil {
 		return nil, err
 	}
+	opened = true
 	return d, nil
+}
+
+// Close unmaps the index files. After Close, the Disk must not be used.
+// Calling Close again returns nil.
+func (d *Disk) Close() error {
+	var firstErr error
+	for _, data := range []*[]byte{&d.dict, &d.post, &d.lens, &d.ids} {
+		if err := unmapFile(*data); err != nil && firstErr == nil {
+			firstErr = err
+		}
+		*data = nil
+	}
+	return firstErr
 }
 
 func formatError(name string, version uint32) error {

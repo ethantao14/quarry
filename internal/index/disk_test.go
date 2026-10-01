@@ -3,14 +3,17 @@ package index
 import (
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash/crc32"
+	"io/fs"
 	"math"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -54,6 +57,7 @@ func TestDiskRoundTrip(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			cleanupDisk(t, disk)
 			if disk.DocCount() != tt.ix.DocCount() || disk.AvgDocLen() != tt.ix.AvgDocLen() {
 				t.Fatalf("index statistics differ: %d, %v", disk.DocCount(), disk.AvgDocLen())
 			}
@@ -82,6 +86,15 @@ func TestDiskRoundTrip(t *testing.T) {
 			}
 		})
 	}
+}
+
+func cleanupDisk(t *testing.T, disk *Disk) {
+	t.Helper()
+	t.Cleanup(func() {
+		if err := disk.Close(); err != nil {
+			t.Errorf("Close() error = %v", err)
+		}
+	})
 }
 
 func readTestFile(t *testing.T, dir, name string) []byte {
@@ -146,6 +159,7 @@ func TestOpenFileCorruption(t *testing.T) {
 			}{
 				{"flip byte", func(b []byte) []byte { b[len(b)-1] ^= 1; return b }, false, "checksum mismatch"},
 				{"truncate", func(b []byte) []byte { return b[:len(b)-1] }, false, "size mismatch"},
+				{"empty", func(b []byte) []byte { return b[:0] }, false, "size mismatch"},
 				{"short header", func(b []byte) []byte { return b[:7] }, true, "truncated header"},
 				{"bad magic", func(b []byte) []byte { b[0] = '!'; return b }, true, "bad magic"},
 				{"bad version", func(b []byte) []byte { binary.LittleEndian.PutUint32(b[4:8], 2); return b }, true, "index is format 2, this build reads format 1"},
@@ -166,9 +180,15 @@ func TestOpenFileCorruption(t *testing.T) {
 							writeTestFile(t, dir, name, data)
 						}
 					}
-					_, err := Open(dir)
+					disk, err := Open(dir)
+					if err == nil {
+						cleanupDisk(t, disk)
+					}
 					if err == nil || !strings.Contains(err.Error(), tt.want) || !strings.Contains(err.Error(), name) {
 						t.Fatalf("Open() error = %v, want %q and %q", err, tt.want, name)
+					}
+					if tt.change == nil && !errors.Is(err, fs.ErrNotExist) {
+						t.Errorf("Open() error = %v, want file not found", err)
 					}
 				})
 			}
@@ -215,7 +235,10 @@ func TestOpenManifestCorruption(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := copyTestIndex(t, source)
 			tt.change(t, dir)
-			_, err := Open(dir)
+			disk, err := Open(dir)
+			if err == nil {
+				cleanupDisk(t, disk)
+			}
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("Open() error = %v, want %q", err, tt.want)
 			}
@@ -263,6 +286,9 @@ func TestOpenTableCorruption(t *testing.T) {
 			dir := copyTestIndex(t, source)
 			rewriteFile(t, dir, tt.file, tt.change(readTestFile(t, dir, tt.file)))
 			disk, err := Open(dir)
+			if err == nil {
+				cleanupDisk(t, disk)
+			}
 			if tt.lookup {
 				if err != nil {
 					t.Fatalf("Open() error = %v", err)
@@ -274,4 +300,93 @@ func TestOpenTableCorruption(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestDiskClose checks idempotent cleanup and ownership of returned data.
+func TestDiskClose(t *testing.T) {
+	memory := smallIndex()
+	dir := filepath.Join(t.TempDir(), "idx")
+	if err := memory.Write(dir); err != nil {
+		t.Fatal(err)
+	}
+	disk, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanupDisk(t, disk)
+	list, err := disk.Postings("a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := disk.ExternalID(0)
+	if err := disk.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if disk.dict != nil || disk.post != nil || disk.lens != nil || disk.ids != nil {
+		t.Error("Close() did not clear all mappings")
+	}
+	if err := disk.Close(); err != nil {
+		t.Fatalf("second Close() error = %v", err)
+	}
+	if !reflect.DeepEqual(list, memory.postings["a"]) {
+		t.Errorf("saved postings = %v, want %v", list, memory.postings["a"])
+	}
+	if id != memory.ExternalID(0) {
+		t.Errorf("saved external ID = %q, want %q", id, memory.ExternalID(0))
+	}
+}
+
+// TestDiskConcurrentReads compares concurrent lookups with an in-memory index.
+func TestDiskConcurrentReads(t *testing.T) {
+	random := rand.New(rand.NewPCG(1, 2))
+	vocabulary := []string{"", "a", "b", "c", "猫", "café"}
+	memory := New()
+	for doc := 0; doc < 30; doc++ {
+		terms := make([]string, random.IntN(31))
+		for i := range terms {
+			terms[i] = vocabulary[random.IntN(len(vocabulary))]
+		}
+		memory.Add(fmt.Sprintf("doc-%d", doc), terms)
+	}
+	dir := filepath.Join(t.TempDir(), "idx")
+	if err := memory.Write(dir); err != nil {
+		t.Fatal(err)
+	}
+	disk, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanupDisk(t, disk)
+	vocabulary = append(vocabulary, "absent")
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Go(func() {
+			for range 100 {
+				for _, term := range vocabulary {
+					got, err := disk.Postings(term)
+					if err != nil {
+						t.Errorf("Postings(%q) error = %v", term, err)
+						return
+					}
+					want, err := memory.Postings(term)
+					if err != nil {
+						t.Errorf("memory.Postings(%q) error = %v", term, err)
+						return
+					}
+					if !reflect.DeepEqual(got, want) {
+						t.Errorf("Postings(%q) = %v, want %v", term, got, want)
+						return
+					}
+				}
+				for doc := 0; doc < memory.DocCount(); doc++ {
+					docID := uint32(doc)
+					if disk.DocLen(docID) != memory.DocLen(docID) || disk.ExternalID(docID) != memory.ExternalID(docID) {
+						t.Errorf("document %d differs", doc)
+						return
+					}
+				}
+			}
+		})
+	}
+	wg.Wait()
 }

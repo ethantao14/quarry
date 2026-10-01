@@ -59,7 +59,13 @@ func run(args []string, stdout, stderr io.Writer) error {
 
 	var ix searchIndex
 	if *indexPath != "" {
-		ix, err = index.Open(*indexPath)
+		disk, err := index.Open(*indexPath)
+		if err != nil {
+			return err
+		}
+		// Unmapping a read-only mapping cannot lose data.
+		defer func() { _ = disk.Close() }()
+		ix = disk
 	} else {
 		ix, err = corpus.LoadFile(filepath.Join(*dataset, "corpus.jsonl"))
 	}
