@@ -22,6 +22,8 @@ func (ix *Index) Write(dir string) error {
 	if uint64(ix.DocCount()) > math.MaxUint32 || uint64(ix.TermCount()) > math.MaxUint32 {
 		return fmt.Errorf("index counts exceed format limits")
 	}
+	// Clean drops a trailing slash, so Dir returns the parent, not dir itself.
+	dir = filepath.Clean(dir)
 	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
 		return fmt.Errorf("create index parent: %w", err)
 	}

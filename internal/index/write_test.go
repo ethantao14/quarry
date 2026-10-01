@@ -11,15 +11,17 @@ func TestWriteDirectory(t *testing.T) {
 	tests := []struct {
 		name     string
 		existing bool
+		suffix   string
 	}{
 		{name: "existing directory", existing: true},
 		{name: "missing parents"},
+		{name: "trailing slash", suffix: string(filepath.Separator)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := t.TempDir()
 			if !tt.existing {
-				dir = filepath.Join(dir, "nested", "parent", "idx")
+				dir = filepath.Join(dir, "nested", "parent", "idx") + tt.suffix
 			}
 			err := New().Write(dir)
 			if tt.existing {
