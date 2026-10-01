@@ -18,6 +18,12 @@ import (
 	"github.com/ethantao14/quarry/internal/scoring"
 )
 
+// searchIndex is an index that can also map results back to corpus IDs.
+type searchIndex interface {
+	query.Index
+	ExternalID(docID uint32) string
+}
+
 func main() {
 	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
 		fmt.Fprintln(os.Stderr, "quarry-eval:", err)
@@ -30,6 +36,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("quarry-eval", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	dataset := flags.String("dataset", "", "path to a BEIR dataset directory")
+	indexPath := flags.String("index", "", "path to a saved index directory")
 	runPath := flags.String("run", "", "path to the output TREC run file")
 	k := flags.Int("k", 1000, "number of results per query")
 
@@ -50,7 +57,12 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return errors.New("--k must be at least 1")
 	}
 
-	ix, err := corpus.LoadFile(filepath.Join(*dataset, "corpus.jsonl"))
+	var ix searchIndex
+	if *indexPath != "" {
+		ix, err = index.Open(*indexPath)
+	} else {
+		ix, err = corpus.LoadFile(filepath.Join(*dataset, "corpus.jsonl"))
+	}
 	if err != nil {
 		return err
 	}
@@ -92,7 +104,7 @@ func loadQrels(path string) (eval.Qrels, error) {
 }
 
 // writeRun searches every judged query, in sorted ID order, and writes a TREC run file.
-func writeRun(path string, ix *index.Index, queries map[string]string, qrels eval.Qrels, k int) error {
+func writeRun(path string, ix searchIndex, queries map[string]string, qrels eval.Qrels, k int) error {
 	queryIDs := make([]string, 0, len(qrels))
 	for queryID := range qrels {
 		if _, ok := queries[queryID]; !ok {
@@ -114,7 +126,10 @@ func writeRun(path string, ix *index.Index, queries map[string]string, qrels eva
 
 	for _, queryID := range queryIDs {
 		terms := analysis.Analyze(queries[queryID])
-		results := query.Exhaustive(ix, scoring.DefaultBM25(), terms, k)
+		results, err := query.Exhaustive(ix, scoring.DefaultBM25(), terms, k)
+		if err != nil {
+			return fmt.Errorf("query %q: %w", queryID, err)
+		}
 		entries := make([]eval.RunEntry, len(results))
 		for i, result := range results {
 			entries[i] = eval.RunEntry{DocID: ix.ExternalID(result.DocID), Score: result.Score}

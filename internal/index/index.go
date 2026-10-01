@@ -1,16 +1,12 @@
 // Package index stores which documents contain which terms.
 package index
 
-// Posting records that a document contains a term, and how many times.
-type Posting struct {
-	DocID uint32
-	TF    uint32
-}
+import "github.com/ethantao14/quarry/internal/postings"
 
 // Index is an in-memory inverted index. Internal doc IDs are assigned in
 // the order documents are added, so every postings list is sorted by DocID.
 type Index struct {
-	postings    map[string][]Posting
+	postings    map[string][]postings.Posting
 	docLens     []uint32
 	externalIDs []string
 	totalLen    uint64
@@ -18,7 +14,7 @@ type Index struct {
 
 // New returns an empty index.
 func New() *Index {
-	return &Index{postings: make(map[string][]Posting)}
+	return &Index{postings: make(map[string][]postings.Posting)}
 }
 
 // Add indexes a document's terms and returns its internal doc ID.
@@ -30,7 +26,7 @@ func (ix *Index) Add(externalID string, terms []string) uint32 {
 		termCounts[term]++
 	}
 	for term, tf := range termCounts {
-		ix.postings[term] = append(ix.postings[term], Posting{DocID: docID, TF: tf})
+		ix.postings[term] = append(ix.postings[term], postings.Posting{DocID: docID, TF: tf})
 	}
 
 	ix.docLens = append(ix.docLens, uint32(len(terms)))
@@ -40,8 +36,8 @@ func (ix *Index) Add(externalID string, terms []string) uint32 {
 }
 
 // Postings returns the postings list for term, or nil if no document has it.
-func (ix *Index) Postings(term string) []Posting {
-	return ix.postings[term]
+func (ix *Index) Postings(term string) ([]postings.Posting, error) {
+	return ix.postings[term], nil
 }
 
 // DocCount returns the number of documents in the index.
@@ -65,4 +61,9 @@ func (ix *Index) AvgDocLen() float64 {
 // ExternalID returns the ID a document had in the original corpus.
 func (ix *Index) ExternalID(docID uint32) string {
 	return ix.externalIDs[docID]
+}
+
+// TermCount returns the number of distinct terms in the index.
+func (ix *Index) TermCount() int {
+	return len(ix.postings)
 }

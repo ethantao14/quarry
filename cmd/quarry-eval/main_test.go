@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ethantao14/quarry/internal/corpus"
 )
 
 func TestRunFlags(t *testing.T) {
@@ -22,6 +24,7 @@ func TestRunFlags(t *testing.T) {
 		{name: "zero k", args: []string{"--dataset", "testdata/tiny", "--run", "unused.trec", "--k", "0"}, wantErr: "--k must be at least 1"},
 		{name: "negative k", args: []string{"--dataset", "testdata/tiny", "--run", "unused.trec", "--k", "-1"}, wantErr: "--k must be at least 1"},
 		{name: "noninteger k", args: []string{"--k", "bad"}, wantErr: "invalid value"},
+		{name: "nonexistent index", args: []string{"--dataset", "testdata/tiny", "--run", "unused.trec", "--index", "testdata/nonexistent"}, wantErr: "manifest.json"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -60,29 +63,70 @@ func TestRun(t *testing.T) {
 			wantRun:    "q1 Q0 a 1 0.364814 quarry\nq2 Q0 c 1 0.633670 quarry\n",
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			runPath := filepath.Join(t.TempDir(), "nested", "runs", "tiny.trec")
-			args := append([]string{"--dataset", "testdata/tiny", "--run", runPath}, tt.args...)
-			var stdout, stderr bytes.Buffer
-			if err := run(args, &stdout, &stderr); err != nil {
-				t.Fatalf("run(%q) error = %v, want nil", args, err)
-			}
-			if got := stdout.String(); got != tt.wantStdout {
-				t.Errorf("run(%q) stdout = %q, want %q", args, got, tt.wantStdout)
-			}
-			if got := stderr.String(); got != "" {
-				t.Errorf("run(%q) stderr = %q, want empty", args, got)
-			}
-			contents, err := os.ReadFile(runPath)
-			if err != nil {
-				t.Fatalf("ReadFile(%q) error = %v, want nil", runPath, err)
-			}
-			if got := string(contents); got != tt.wantRun {
-				t.Errorf("run(%q) run file = %q, want %q", args, got, tt.wantRun)
-			}
-		})
+	// A saved index must give exactly the same output as loading the corpus.
+	// Its dataset has no corpus.jsonl, so the run cannot silently use the corpus.
+	sources := map[string][]string{
+		"corpus": {"--dataset", "testdata/tiny"},
+		"index":  {"--dataset", datasetWithoutCorpus(t), "--index", saveTinyIndex(t)},
 	}
+	for _, tt := range tests {
+		for sourceName, sourceArgs := range sources {
+			t.Run(tt.name+" from "+sourceName, func(t *testing.T) {
+				runPath := filepath.Join(t.TempDir(), "nested", "runs", "tiny.trec")
+				args := append([]string{"--run", runPath}, sourceArgs...)
+				args = append(args, tt.args...)
+				var stdout, stderr bytes.Buffer
+				if err := run(args, &stdout, &stderr); err != nil {
+					t.Fatalf("run(%q) error = %v, want nil", args, err)
+				}
+				if got := stdout.String(); got != tt.wantStdout {
+					t.Errorf("run(%q) stdout = %q, want %q", args, got, tt.wantStdout)
+				}
+				if got := stderr.String(); got != "" {
+					t.Errorf("run(%q) stderr = %q, want empty", args, got)
+				}
+				contents, err := os.ReadFile(runPath)
+				if err != nil {
+					t.Fatalf("ReadFile(%q) error = %v, want nil", runPath, err)
+				}
+				if got := string(contents); got != tt.wantRun {
+					t.Errorf("run(%q) run file = %q, want %q", args, got, tt.wantRun)
+				}
+			})
+		}
+	}
+}
+
+func datasetWithoutCorpus(t *testing.T) string {
+	t.Helper()
+	dataset := t.TempDir()
+	for _, name := range []string{"queries.jsonl", "qrels/test.tsv"} {
+		contents, err := os.ReadFile(filepath.Join("testdata", "tiny", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(dataset, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, contents, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dataset
+}
+
+func saveTinyIndex(t *testing.T) string {
+	t.Helper()
+	ix, err := corpus.LoadFile(filepath.Join("testdata", "tiny", "corpus.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "idx")
+	if err := ix.Write(path); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 func TestRunDataset(t *testing.T) {

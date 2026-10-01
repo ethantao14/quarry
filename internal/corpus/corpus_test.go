@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ethantao14/quarry/internal/index"
+	"github.com/ethantao14/quarry/internal/postings"
 )
 
 func TestLoad(t *testing.T) {
@@ -60,14 +60,18 @@ func TestLoadTokenizesTitleAndText(t *testing.T) {
 	}
 	tests := []struct {
 		term string
-		want []index.Posting
+		want []postings.Posting
 	}{
-		{term: "red", want: []index.Posting{{DocID: 0, TF: 1}}},
-		{term: "fish", want: []index.Posting{{DocID: 0, TF: 2}}},
+		{term: "red", want: []postings.Posting{{DocID: 0, TF: 1}}},
+		{term: "fish", want: []postings.Posting{{DocID: 0, TF: 2}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.term, func(t *testing.T) {
-			if got := ix.Postings(tt.term); !slices.Equal(got, tt.want) {
+			got, err := ix.Postings(tt.term)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(got, tt.want) {
 				t.Errorf("Postings(%q) = %v, want %v", tt.term, got, tt.want)
 			}
 		})

@@ -4,8 +4,8 @@ A full-text search engine written from scratch in Go. It builds an inverted inde
 results with BM25, and speeds up top-k retrieval with dynamic pruning (WAND and Block-Max WAND).
 It is evaluated on the public MS MARCO and BEIR benchmarks against published BM25 baselines.
 
-**Status:** in-memory search with English text analysis and evaluation work. On-disk indexing and
-pruning are not implemented yet.
+**Status:** English text analysis, BM25 search, evaluation, and saving an index to disk work.
+Memory-mapped reads, indexing at MS MARCO scale, and pruning are not implemented yet.
 
 ## Requirements
 
@@ -24,6 +24,19 @@ go build -o bin/quarry-search ./cmd/quarry-search
 Use a BEIR JSONL corpus with `_id`, `title`, and `text` fields. Results are tab-separated:
 `rank` (1-based), `external document ID`, and `score` (four decimal places).
 
+To analyze the corpus once instead of on every search, save an index and search that:
+
+```sh
+go build -o bin/ ./cmd/...
+./bin/quarry-index --corpus cmd/quarry-search/testdata/tiny.jsonl --out data/indexes/tiny
+./bin/quarry-search --index data/indexes/tiny --k 2 fish
+```
+
+`quarry-index` prints the document count, distinct term count, and total index size in bytes. It
+refuses to overwrite an existing directory. Use exactly one of `--corpus` or `--index` when
+searching. Results from a saved index are identical to searching the corpus directly. The format is
+described in [docs/DESIGN.md](docs/DESIGN.md#on-disk-index-format).
+
 ## Evaluation
 
 ```sh
@@ -31,7 +44,8 @@ scripts/download.sh scifact
 go run ./cmd/quarry-eval --dataset data/beir/scifact --run runs/scifact.trec --k 1000
 ```
 
-The same works for NFCorpus: replace `scifact` with `nfcorpus` in both commands.
+The same works for NFCorpus: replace `scifact` with `nfcorpus` in both commands. To evaluate a
+saved index, add `--index <dir>`; queries and judgments still come from `--dataset`.
 
 Output is tab-separated, with metrics printed to four decimal places:
 

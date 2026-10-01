@@ -78,3 +78,43 @@ rounded down (100 is stored as 96, 300 as 280). It also scores in 32-bit floats.
 is the likely reason SciFact nDCG@10 is 0.6777 against Anserini's 0.6789 while Recall@100 and
 Recall@1000 match exactly: the same documents are retrieved, and a few near-ties are ordered
 differently.
+
+## On-disk index format
+
+`quarry-index` saves an index as a directory of five files (format version 1). All integers are
+little-endian. Each binary file starts with an 8-byte header, a 4-byte magic string and the format
+version, so a file from another format or version is rejected with a clear error.
+
+```text
+manifest.json   format_version, doc_count, total_terms, term_count,
+                and for each binary file: its size and CRC32C checksum (written last)
+seg0.dict       "QDCT" v1 | termCount u32 | termCount x 24-byte entries | term bytes
+                entry: termOffset u32, termLen u32, docFreq u32, postingsOffset u64, postingsLen u32
+seg0.post       "QPST" v1 | each term's postings, in dictionary order
+                posting: uvarint(docID gap), uvarint(tf); the first gap is the doc ID itself
+seg0.lens       "QLEN" v1 | docCount u32 | docCount x u32 document lengths
+seg0.ids        "QIDS" v1 | docCount u32 | (docCount + 1) x u64 offsets | external ID bytes
+```
+
+Choices and tradeoffs:
+
+- **Fixed-width dictionary entries, sorted by term.** Finding a term is a binary search over equal-sized
+  rows, with no parsing and no in-memory map to build at startup. Terms live in a separate blob so
+  rows stay fixed-width. Front-coded blocks or an FST would be smaller, but are more complex.
+- **Delta + varint postings.** Doc IDs are stored as gaps from the previous doc ID. Gaps are small for
+  common terms, so most take one byte. A later codec will use blocks of 128 postings with skip data
+  for fast `advance(target)`, which pruning (WAND, Block-Max WAND) needs.
+- **Strict decoding.** The decoder returns an error, never panics, on truncated input, values over
+  32 bits, a zero gap after the first posting, a zero term frequency, a non-minimal varint, or
+  leftover bytes. It is fuzz tested.
+- **Checked on open.** Every file's size and CRC32C must match the manifest, and every table offset is
+  bounds-checked, so a corrupt or partly written index fails at open instead of returning wrong results.
+  The manifest is written last, so an interrupted build has no manifest and is rejected.
+- **No overwrites.** `quarry-index` refuses to write into an existing directory.
+
+Files are currently read fully into memory. Lookups already work directly on the raw bytes, so the next
+step can switch to memory-mapping the files without changing the format.
+
+Searching a saved index gives exactly the same results as the in-memory index: the same documents and
+bit-identical scores. This is checked on 200 random corpora in the tests, and the run files for SciFact
+and NFCorpus are byte-identical.
