@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ethantao14/quarry/internal/postings"
 )
 
 func TestWriteDirectory(t *testing.T) {
@@ -42,6 +44,34 @@ func TestWriteDirectory(t *testing.T) {
 				t.Fatal(err)
 			}
 			cleanupDisk(t, disk)
+		})
+	}
+}
+
+// TestSegmentWriterTermOrder rejects duplicates and descending terms, including empty terms.
+func TestSegmentWriterTermOrder(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		first  string
+		second string
+	}{
+		{"duplicate", "a", "a"},
+		{"descending", "b", "a"},
+		{"empty duplicate", "", ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			writer, err := newSegmentWriter(t.TempDir(), temporary)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer writer.abort()
+			list := []postings.Posting{{DocID: 0, TF: 1}}
+			if err := writer.addTerm(tt.first, list); err != nil {
+				t.Fatal(err)
+			}
+			if err := writer.addTerm(tt.second, list); err == nil || !strings.Contains(err.Error(), "strictly ascending") {
+				t.Fatalf("addTerm() error = %v, want strictly ascending", err)
+			}
 		})
 	}
 }
