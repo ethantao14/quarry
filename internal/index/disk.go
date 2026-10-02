@@ -30,6 +30,11 @@ type Disk struct {
 // Open memory-maps and validates an index directory without decoding its tables.
 // Data returned by Disk methods does not point into the mappings. Call Close when done.
 func Open(dir string) (*Disk, error) {
+	// Resolve through the OS first; filepath.Join resolves ".." by text otherwise.
+	dir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", manifestName, err)
+	}
 	data, err := os.ReadFile(filepath.Join(dir, manifestName))
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", manifestName, err)
@@ -241,15 +246,19 @@ func (d *Disk) Postings(term string) ([]postings.Posting, error) {
 	if string(d.term(entry)) != term {
 		return nil, nil
 	}
+	return d.postingsEntry(entry)
+}
+
+func (d *Disk) postingsEntry(entry dictEntry) ([]postings.Posting, error) {
 	start := entry.postingsOffset
 	data := d.post[start : start+uint64(entry.postingsLen)]
 	list, err := postings.Decode(data, int(entry.docFreq))
 	if err != nil {
-		return nil, fmt.Errorf("%s: term %q: %w", postName, term, err)
+		return nil, fmt.Errorf("%s: term %q: %w", postName, d.term(entry), err)
 	}
 	for i, posting := range list {
 		if posting.DocID >= d.docCount {
-			return nil, fmt.Errorf("%s: term %q posting %d: doc ID out of bounds", postName, term, i)
+			return nil, fmt.Errorf("%s: term %q posting %d: doc ID out of bounds", postName, d.term(entry), i)
 		}
 	}
 	return list, nil
@@ -281,4 +290,9 @@ func (d *Disk) ExternalID(docID uint32) string {
 	}
 	start := d.idBlobStart()
 	return string(d.ids[start+d.idOffset(docID) : start+d.idOffset(docID+1)])
+}
+
+// TermCount returns the number of distinct terms in the index.
+func (d *Disk) TermCount() int {
+	return int(d.termCount)
 }

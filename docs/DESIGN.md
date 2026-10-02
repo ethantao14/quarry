@@ -143,3 +143,40 @@ index, end-to-end search and evaluation time and peak memory did not measurably 
 Searching a saved index gives exactly the same results as the in-memory index: the same documents and
 bit-identical scores. This is checked on 200 random corpora in the tests, and the run files for SciFact
 and NFCorpus are byte-identical.
+
+## Indexing within a memory budget
+
+`quarry-index` uses single-pass in-memory indexing (SPIMI). It collects postings for a chunk of
+documents in memory, and when an estimate of the chunk's memory reaches `--mem-budget`, it writes the
+chunk as a temporary segment (`tmp-seg0`, `tmp-seg1`, ... inside the output directory) and starts a new
+chunk. At the end, a k-way merge combines the segments into the final single-segment index, and the
+temporary segments are deleted. If everything fits in the budget, the index is written directly.
+
+- **Doc IDs need no remapping.** Documents get IDs in input order, and each chunk holds a contiguous
+  range. A segment stores IDs from 0, and the merge adds the segment's starting ID. Because ranges never
+  overlap and only increase, a term's postings from several segments are simply joined in segment order.
+- **The merge is over terms, not postings.** Each segment's dictionary is sorted, so a min-heap holding
+  one cursor per segment yields terms in global order. Ties go to the earlier segment.
+- **One writer for both paths.** A streaming segment writer takes terms in sorted order and writes their
+  postings immediately; only the 24-byte dictionary rows and term bytes are kept until the end. The
+  single-pass write and the merge both use it, so the output is byte-identical for any budget. Tests
+  check this on random corpora at several budgets, and SciFact and NFCorpus built with budgets from 16 KB
+  (1,849 segments) to 1 GB (no segments) are byte-identical to a single-pass build.
+- **Temporary segments skip `fsync`.** They are deleted after the merge, and a crash before the final
+  manifest leaves an index that `Open` rejects, so syncing them buys nothing. On macOS, Go's `Sync` is a
+  full flush to the drive, so skipping it matters.
+- **A failed build cleans up.** `quarry-index` removes its partial output directory on any error.
+
+What the budget does and does not cover:
+
+- **The estimate is approximate.** Per new term it counts the term bytes plus 64 bytes of map and slice
+  overhead; per posting 8 bytes; per document 4 bytes of length plus the ID and a 16-byte string header.
+  On full SciFact and NFCorpus chunks, the live heap was 1.37 and 1.33 times the estimate, most likely
+  from spare capacity left when Go grows postings slices. Go's garbage collector also lets the heap grow
+  to about twice the live data by default. The constants will be tuned against MS MARCO, not these small
+  sets.
+- **The merge is outside the budget.** It holds one dictionary row per distinct term, one decoded
+  postings list at a time, and a mapping per segment. With a tiny budget and thousands of segments,
+  per-segment overhead dominates (SciFact at 16 KB peaked at 130 MB resident), so budgets should be
+  large enough to keep the segment count small.
+
