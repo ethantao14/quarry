@@ -283,3 +283,26 @@ func TestBuilderFlushesAtBudget(t *testing.T) {
 		})
 	}
 }
+
+// TestBuilderAbort removes the directory and its temporary segments, and ends the build.
+func TestBuilderAbort(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "idx")
+	builder, err := NewBuilder(dir, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"a", "b"} {
+		if err := builder.Add(id, []string{"shared"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := builder.Abort(); err != nil {
+		t.Fatalf("Abort() error = %v", err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Errorf("Abort left %s behind: %v", dir, err)
+	}
+	if err := builder.Add("late", nil); err == nil {
+		t.Error("Add after Abort succeeded")
+	}
+}

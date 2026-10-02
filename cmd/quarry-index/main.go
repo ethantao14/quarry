@@ -74,8 +74,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 	return err
 }
 
-// build indexes the corpus into out. NewBuilder only succeeds on a directory it
-// created, so on failure the partial directory is removed and a rerun can start clean.
+// build indexes the corpus into out. On failure it removes the partial index, so
+// a rerun can start clean. Abort removes only the directory NewBuilder created.
 func build(corpusPath, out string, budget int64) (int, error) {
 	builder, err := index.NewBuilder(out, budget)
 	if err != nil {
@@ -86,7 +86,7 @@ func build(corpusPath, out string, budget int64) (int, error) {
 		err = builder.Finish()
 	}
 	if err != nil {
-		if removeErr := os.RemoveAll(out); removeErr != nil {
+		if removeErr := builder.Abort(); removeErr != nil {
 			return 0, fmt.Errorf("%w (and removing %s failed: %v)", err, out, removeErr)
 		}
 		return 0, err

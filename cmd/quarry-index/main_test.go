@@ -74,6 +74,36 @@ func TestRunRemovesFailedIndex(t *testing.T) {
 	}
 }
 
+// A path through a symlink and ".." must never make cleanup remove another directory.
+func TestRunFailureKeepsUnrelatedDirectory(t *testing.T) {
+	root := t.TempDir()
+	for _, dir := range []string{"target/sub", "target/idx", "work"} {
+		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	precious := filepath.Join(root, "target", "idx", "precious.txt")
+	if err := os.WriteFile(precious, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, "target", "sub"), filepath.Join(root, "work", "link")); err != nil {
+		t.Fatal(err)
+	}
+	// The OS resolves work/link/../idx to target/idx, which already exists.
+	out := filepath.Join(root, "work", "link") + "/../idx"
+	args := []string{"--corpus", "testdata/nonexistent.jsonl", "--out", out}
+	var stdout, stderr bytes.Buffer
+	if err := run(args, &stdout, &stderr); err == nil {
+		t.Fatalf("run(%q) succeeded, want error", args)
+	}
+	if _, err := os.Stat(precious); err != nil {
+		t.Errorf("failed run removed an unrelated file: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "work", "idx")); !os.IsNotExist(err) {
+		t.Errorf("failed run left work/idx behind: %v", err)
+	}
+}
+
 func TestRunWritesIndex(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "nested", "idx")
 	var stdout, stderr bytes.Buffer

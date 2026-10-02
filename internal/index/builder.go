@@ -25,8 +25,8 @@ func NewBuilder(dir string, memBudget int64) (*Builder, error) {
 	if memBudget <= 0 {
 		return nil, fmt.Errorf("memory budget must be positive")
 	}
-	dir = filepath.Clean(dir)
-	if err := createIndexDir(dir); err != nil {
+	dir, err := createIndexDir(dir)
+	if err != nil {
 		return nil, err
 	}
 	return &Builder{dir: dir, memBudget: memBudget, chunk: New()}, nil
@@ -77,7 +77,8 @@ func (b *Builder) segmentDir(n int) string {
 
 func (b *Builder) flush() error {
 	dir := b.segmentDir(len(b.segments))
-	if err := createIndexDir(dir); err != nil {
+	dir, err := createIndexDir(dir)
+	if err != nil {
 		return err
 	}
 	if err := b.chunk.writeSegment(dir, temporary); err != nil {
@@ -120,6 +121,13 @@ func (b *Builder) Finish() error {
 		}
 	}
 	return nil
+}
+
+// Abort ends the build and removes the index directory NewBuilder created,
+// including any temporary segments. Use it when indexing fails.
+func (b *Builder) Abort() error {
+	b.finished = true
+	return os.RemoveAll(b.dir)
 }
 
 // Segments returns the number of chunks flushed to temporary segment directories.

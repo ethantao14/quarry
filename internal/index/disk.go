@@ -30,6 +30,11 @@ type Disk struct {
 // Open memory-maps and validates an index directory without decoding its tables.
 // Data returned by Disk methods does not point into the mappings. Call Close when done.
 func Open(dir string) (*Disk, error) {
+	// Resolve through the OS first; filepath.Join resolves ".." by text otherwise.
+	dir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", manifestName, err)
+	}
 	data, err := os.ReadFile(filepath.Join(dir, manifestName))
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", manifestName, err)

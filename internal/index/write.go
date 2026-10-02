@@ -23,9 +23,8 @@ func (ix *Index) Write(dir string) error {
 	if uint64(ix.DocCount()) > math.MaxUint32 || uint64(ix.TermCount()) > math.MaxUint32 {
 		return fmt.Errorf("index counts exceed format limits")
 	}
-	// Clean drops a trailing slash, so Dir returns the parent, not dir itself.
-	dir = filepath.Clean(dir)
-	if err := createIndexDir(dir); err != nil {
+	dir, err := createIndexDir(dir)
+	if err != nil {
 		return err
 	}
 	return ix.writeSegment(dir, durable)
@@ -38,17 +37,46 @@ const (
 	temporary = false
 )
 
-func createIndexDir(dir string) error {
-	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
-		return fmt.Errorf("create index parent: %w", err)
+// createIndexDir creates a new, empty index directory and returns its path with
+// the parent resolved through the OS. filepath.Join and Clean resolve ".." by
+// text, which disagrees with the OS when a symlink comes before "..".
+func createIndexDir(dir string) (string, error) {
+	parent, name := splitLastElement(dir)
+	if name == "" || name == "." || name == ".." {
+		return "", fmt.Errorf("invalid index directory %q", dir)
 	}
-	if err := os.Mkdir(dir, 0o755); err != nil {
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		return "", fmt.Errorf("create index parent: %w", err)
+	}
+	resolvedParent, err := filepath.EvalSymlinks(parent)
+	if err != nil {
+		return "", fmt.Errorf("resolve index parent: %w", err)
+	}
+	resolved := filepath.Join(resolvedParent, name)
+	if err := os.Mkdir(resolved, 0o755); err != nil {
 		if errors.Is(err, fs.ErrExist) {
-			return fmt.Errorf("index directory %s already exists: %w", dir, err)
+			return "", fmt.Errorf("index directory %s already exists: %w", dir, err)
 		}
-		return fmt.Errorf("create index directory: %w", err)
+		return "", fmt.Errorf("create index directory: %w", err)
 	}
-	return nil
+	return resolved, nil
+}
+
+// splitLastElement splits dir into its parent and last element without cleaning
+// the text, ignoring trailing separators.
+func splitLastElement(dir string) (parent, name string) {
+	for len(dir) > 1 && os.IsPathSeparator(dir[len(dir)-1]) {
+		dir = dir[:len(dir)-1]
+	}
+	for i := len(dir) - 1; i >= 0; i-- {
+		if os.IsPathSeparator(dir[i]) {
+			if i == 0 {
+				return dir[:1], dir[1:]
+			}
+			return dir[:i], dir[i+1:]
+		}
+	}
+	return ".", dir
 }
 
 func (ix *Index) writeSegment(dir string, sync bool) error {

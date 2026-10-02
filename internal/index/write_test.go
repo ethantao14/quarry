@@ -75,3 +75,61 @@ func TestSegmentWriterTermOrder(t *testing.T) {
 		})
 	}
 }
+
+// An index written through a symlink and ".." must open at the same path,
+// so the writer must resolve the path like the OS does.
+func TestWriteThroughSymlink(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "target", "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "work"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, "target", "sub"), filepath.Join(root, "work", "link")); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(root, "work", "link") + "/../idx"
+	if err := smallIndex().Write(dir); err != nil {
+		t.Fatal(err)
+	}
+	disk, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open(%q) error = %v", dir, err)
+	}
+	cleanupDisk(t, disk)
+	if _, err := os.Stat(filepath.Join(root, "target", "idx", manifestName)); err != nil {
+		t.Errorf("index not at the OS-resolved path: %v", err)
+	}
+}
+
+func TestSplitLastElement(t *testing.T) {
+	tests := []struct {
+		dir, wantParent, wantName string
+	}{
+		{"idx", ".", "idx"},
+		{"a/idx", "a", "idx"},
+		{"a/idx//", "a", "idx"},
+		{"/idx", "/", "idx"},
+		{"/", "/", ""},
+		{"a/..", "a", ".."},
+		{"a/link/../idx", "a/link/..", "idx"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.dir, func(t *testing.T) {
+			parent, name := splitLastElement(tt.dir)
+			if parent != tt.wantParent || name != tt.wantName {
+				t.Errorf("splitLastElement(%q) = %q, %q, want %q, %q", tt.dir, parent, name, tt.wantParent, tt.wantName)
+			}
+		})
+	}
+}
+
+func TestWriteInvalidDirectoryName(t *testing.T) {
+	root := t.TempDir()
+	for _, dir := range []string{filepath.Join(root, "a") + "/..", filepath.Join(root, "a") + "/.", "/"} {
+		if err := New().Write(dir); err == nil || !strings.Contains(err.Error(), "invalid index directory") {
+			t.Errorf("Write(%q) error = %v, want invalid index directory", dir, err)
+		}
+	}
+}
