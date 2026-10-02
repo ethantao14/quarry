@@ -32,8 +32,16 @@ go build -o bin/ ./cmd/...
 ./bin/quarry-search --index data/indexes/tiny --k 2 fish
 ```
 
-`quarry-index` prints the document count, distinct term count, and total index size in bytes. It
-refuses to overwrite an existing directory. Use exactly one of `--corpus` or `--index` when
+`quarry-index` prints the document count, distinct term count, number of temporary segments, and
+total index size in bytes. It refuses to overwrite an existing directory, and removes its partial
+output if indexing fails.
+
+To index a corpus larger than memory, cap the memory used for collecting postings with
+`--mem-budget` (bytes, or a number with `KB`, `MB`, or `GB`; default `1GB`). When the budget is
+reached, quarry writes what it has as a temporary segment and continues; at the end it merges the
+segments into one index. The result is byte-for-byte the same for any budget. The budget is an
+estimate of postings memory, not a hard limit on the whole process (see
+[docs/DESIGN.md](docs/DESIGN.md#indexing-within-a-memory-budget)). Use exactly one of `--corpus` or `--index` when
 searching. Results from a saved index are identical to searching the corpus directly. Saved indexes
 are memory-mapped, which works on macOS and Linux. The format is
 described in [docs/DESIGN.md](docs/DESIGN.md#on-disk-index-format).
