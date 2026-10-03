@@ -180,3 +180,29 @@ What the budget does and does not cover:
   per-segment overhead dominates (SciFact at 16 KB peaked at 130 MB resident), so budgets should be
   large enough to keep the segment count small.
 
+## Parallel text analysis
+
+Profiling a sequential build of SciFact repeated 20 times (wall clock per phase) showed analysis at
+about 78% of the time, adding postings at about 18%, and JSON decoding at about 3%. So only analysis
+runs in parallel, as a pipeline inside `corpus.Read`:
+
+- **One reader goroutine** decodes records in order. It sends each record to a shared `jobs` channel
+  for the workers, and also to an `ordered` channel that keeps input order.
+- **`--workers` goroutines** analyze records from `jobs`. Each record carries its own result channel
+  with room for one value, so a worker never waits to hand back a result.
+- **The calling goroutine** takes records from `ordered`, waits on each record's own result channel,
+  and passes the terms to the index builder. Records reach the builder in input order, so doc IDs and
+  the index bytes do not depend on the worker count, and the builder needs no locks.
+- **Memory stays bounded.** `ordered` holds at most 16 records per worker, so a slow record stalls the
+  reader instead of letting finished results pile up.
+- **Errors keep their order.** A decoding error travels through `ordered` like a record, so the
+  builder sees exactly the records it would have seen sequentially before the error. On any error,
+  `Read` closes a `done` channel and waits for every goroutine to exit before returning.
+
+The alternative was sharded accumulators: each worker builds its own partial index, merged at every
+flush. That would also parallelize adding postings, but doc IDs must still follow input order and the
+memory budget would be split across shards. With the pipeline, decoding and adding postings remain
+sequential (about 2.3 s of the 10.5 s sequential build), which limits the speedup to about 4.4x; 8
+workers measured 4.2x (README, Indexing speed). Sharding is worth revisiting if adding postings
+becomes the bottleneck.
+
