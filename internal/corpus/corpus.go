@@ -2,13 +2,17 @@
 package corpus
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/ethantao14/quarry/internal/analysis"
 	"github.com/ethantao14/quarry/internal/index"
@@ -27,20 +31,88 @@ func Load(r io.Reader) (*index.Index, error) {
 	return ix, nil
 }
 
-// job is one record on its way through Read. Each job has its own result
+// job is one record on its way through the pipeline. Each job has its own result
 // channel, so the consumer can wait for records in input order.
 type job struct {
-	recordNumber int
-	id           string
-	text         string
-	err          error
-	result       chan []string
+	position int
+	id       string
+	text     string
+	err      error
+	result   chan []string
 }
 
 // Read analyzes BEIR JSONL records in parallel and calls visit in input order on the calling goroutine.
 // Decoding and visit errors include the record number and are returned in input order.
 // Read waits for all its goroutines, including any in-progress r.Read call, before returning.
 func Read(r io.Reader, workers int, visit func(externalID string, terms []string) error) error {
+	decoder := json.NewDecoder(r)
+	recordNumber := 0
+	next := func() (int, string, string, error) {
+		recordNumber++
+		var record struct {
+			ID    string `json:"_id"`
+			Title string `json:"title"`
+			Text  string `json:"text"`
+		}
+		err := decoder.Decode(&record)
+		if err == nil && record.ID == "" {
+			err = errors.New("_id is empty")
+		}
+		return recordNumber, record.ID, record.Title + " " + record.Text, err
+	}
+	return readRecords(next, "record", workers, visit)
+}
+
+// ReadTSV analyzes id<TAB>text lines in parallel and calls visit in input order.
+// Empty lines are skipped and errors include the input line number.
+// ReadTSV waits for all its goroutines before returning.
+func ReadTSV(r io.Reader, workers int, visit func(externalID string, terms []string) error) error {
+	source := &tsvReader{reader: bufio.NewReader(r)}
+	return readRecords(source.next, "line", workers, visit)
+}
+
+// tsvReader reads id<TAB>text lines and tracks the 1-based line number.
+type tsvReader struct {
+	reader     *bufio.Reader
+	lineNumber int
+}
+
+// next returns the next non-empty line's number, id, and text, or io.EOF at the end.
+func (r *tsvReader) next() (int, string, string, error) {
+	for {
+		line, err := r.reader.ReadString('\n')
+		r.lineNumber++
+		if err != nil && !errors.Is(err, io.EOF) {
+			return r.lineNumber, "", "", err
+		}
+		if len(line) == 0 && errors.Is(err, io.EOF) {
+			return r.lineNumber, "", "", io.EOF
+		}
+		line = strings.TrimSuffix(line, "\n")
+		line = strings.TrimSuffix(line, "\r")
+		if line == "" {
+			continue
+		}
+		if !utf8.ValidString(line) {
+			return r.lineNumber, "", "", errors.New("invalid UTF-8")
+		}
+		id, text, ok := strings.Cut(line, "\t")
+		if !ok {
+			return r.lineNumber, "", "", errors.New("missing tab")
+		}
+		if id == "" {
+			return r.lineNumber, "", "", errors.New("id is empty")
+		}
+		// id is a substring of line; cloning it lets a kept ID release the whole line.
+		return r.lineNumber, strings.Clone(id), text, nil
+	}
+}
+
+// recordSource returns the next record and its position (record or line number), or io.EOF.
+type recordSource func() (position int, id, text string, err error)
+
+// readRecords runs the ordered pipeline; label names the position in errors ("record" or "line").
+func readRecords(next recordSource, label string, workers int, visit func(string, []string) error) error {
 	if workers < 1 {
 		return errors.New("workers must be at least 1")
 	}
@@ -57,7 +129,7 @@ func Read(r io.Reader, workers int, visit func(externalID string, terms []string
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		decodeJobs(r, jobs, ordered, done)
+		decodeJobs(next, jobs, ordered, done)
 	}()
 	for range workers {
 		wg.Add(1)
@@ -69,11 +141,11 @@ func Read(r io.Reader, workers int, visit func(externalID string, terms []string
 
 	for pending := range ordered {
 		if pending.err != nil {
-			return fmt.Errorf("record %d: %w", pending.recordNumber, pending.err)
+			return fmt.Errorf("%s %d: %w", label, pending.position, pending.err)
 		}
 		terms := <-pending.result
 		if err := visit(pending.id, terms); err != nil {
-			return fmt.Errorf("record %d: %w", pending.recordNumber, err)
+			return fmt.Errorf("%s %d: %w", label, pending.position, err)
 		}
 	}
 	return nil
@@ -81,27 +153,18 @@ func Read(r io.Reader, workers int, visit func(externalID string, terms []string
 
 // decodeJobs sends each record to jobs for analysis and to ordered for the consumer.
 // A record that fails to decode goes only to ordered, and then decoding stops.
-func decodeJobs(r io.Reader, jobs, ordered chan<- job, done <-chan struct{}) {
+func decodeJobs(next recordSource, jobs, ordered chan<- job, done <-chan struct{}) {
 	defer close(jobs)
 	defer close(ordered)
-	decoder := json.NewDecoder(r)
-	for recordNumber := 1; ; recordNumber++ {
-		var record struct {
-			ID    string `json:"_id"`
-			Title string `json:"title"`
-			Text  string `json:"text"`
-		}
-		err := decoder.Decode(&record)
+	for {
+		position, id, text, err := next()
 		if errors.Is(err, io.EOF) {
 			return
 		}
-		if err == nil && record.ID == "" {
-			err = errors.New("_id is empty")
-		}
-		pending := job{recordNumber: recordNumber, err: err}
+		pending := job{position: position, err: err}
 		if err == nil {
-			pending.id = record.ID
-			pending.text = record.Title + " " + record.Text
+			pending.id = id
+			pending.text = text
 			pending.result = make(chan []string, 1)
 			select {
 			case jobs <- pending:
@@ -136,7 +199,7 @@ func analyzeJobs(jobs <-chan job, done <-chan struct{}) {
 	}
 }
 
-// LoadFile opens a corpus file and indexes it with Load.
+// LoadFile indexes a BEIR JSONL corpus, or TSV when the file ends in .tsv.
 func LoadFile(path string) (*index.Index, error) {
 	ix := index.New()
 	if err := ReadFile(path, runtime.GOMAXPROCS(0), func(externalID string, terms []string) error {
@@ -148,7 +211,7 @@ func LoadFile(path string) (*index.Index, error) {
 	return ix, nil
 }
 
-// ReadFile opens a corpus file and visits its documents with Read.
+// ReadFile visits a BEIR JSONL corpus, or TSV when the file ends in .tsv.
 func ReadFile(path string, workers int, visit func(externalID string, terms []string) error) error {
 	file, err := os.Open(path)
 	if err != nil {
@@ -156,7 +219,11 @@ func ReadFile(path string, workers int, visit func(externalID string, terms []st
 	}
 	// The file is only read, so a failed Close cannot lose data.
 	defer func() { _ = file.Close() }()
-	if err := Read(file, workers, visit); err != nil {
+	read := Read
+	if strings.EqualFold(filepath.Ext(path), ".tsv") {
+		read = ReadTSV
+	}
+	if err := read(file, workers, visit); err != nil {
 		return fmt.Errorf("load corpus %s: %w", path, err)
 	}
 	return nil

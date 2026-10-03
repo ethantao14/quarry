@@ -1,4 +1,5 @@
-// Command quarry-eval writes a TREC run and evaluates a BEIR dataset.
+// Command quarry-eval writes and evaluates a TREC run from a BEIR dataset or saved index.
+// Queries can be BEIR JSONL or .tsv (id<TAB>text); qrels can be BEIR TSV or TREC.
 package main
 
 import (
@@ -35,8 +36,10 @@ func main() {
 func run(args []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("quarry-eval", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	dataset := flags.String("dataset", "", "path to a BEIR dataset directory")
+	dataset := flags.String("dataset", "", "BEIR directory for the corpus and default queries and qrels paths")
 	indexPath := flags.String("index", "", "path to a saved index directory")
+	queriesPath := flags.String("queries", "", "BEIR JSONL or .tsv queries path (default <dataset>/queries.jsonl)")
+	qrelsPath := flags.String("qrels", "", "BEIR TSV or TREC qrels path (default <dataset>/qrels/test.tsv)")
 	runPath := flags.String("run", "", "path to the output TREC run file")
 	k := flags.Int("k", 1000, "number of results per query")
 
@@ -47,14 +50,20 @@ func run(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if *dataset == "" {
-		return errors.New("--dataset is required")
+	if *dataset == "" && (*indexPath == "" || *queriesPath == "" || *qrelsPath == "") {
+		return errors.New("--dataset is required unless --index, --queries, and --qrels are all set")
 	}
 	if *runPath == "" {
 		return errors.New("--run is required")
 	}
 	if *k < 1 {
 		return errors.New("--k must be at least 1")
+	}
+	if *queriesPath == "" {
+		*queriesPath = filepath.Join(*dataset, "queries.jsonl")
+	}
+	if *qrelsPath == "" {
+		*qrelsPath = filepath.Join(*dataset, "qrels", "test.tsv")
 	}
 
 	var ix searchIndex
@@ -72,11 +81,11 @@ func run(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	queries, err := corpus.LoadQueries(filepath.Join(*dataset, "queries.jsonl"))
+	queries, err := corpus.LoadQueries(*queriesPath)
 	if err != nil {
 		return err
 	}
-	qrels, err := loadQrels(filepath.Join(*dataset, "qrels", "test.tsv"))
+	qrels, err := loadQrels(*qrelsPath)
 	if err != nil {
 		return err
 	}

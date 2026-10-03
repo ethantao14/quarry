@@ -23,9 +23,9 @@ func TestReadQrels(t *testing.T) {
 		{name: "CRLF", input: "query-id\tcorpus-id\tscore\r\nq1\ta\t1\r\n", want: Qrels{"q1": {"a": 1}}},
 		{name: "header only", input: header, want: Qrels{}},
 		{name: "empty input", wantErr: "line 1: missing qrels header"},
-		{name: "missing header", input: "q1\ta\t1", wantErr: "line 1:"},
-		{name: "wrong header", input: "query-id corpus-id score\n", wantErr: "line 1:"},
-		{name: "blank first line", input: "\n" + header, wantErr: "line 1:"},
+		{name: "missing header", input: "q1\ta\t1", wantErr: "line 1: expected 4 fields, got 3"},
+		{name: "wrong header", input: "query-id corpus-id score\n", wantErr: "line 1: expected 4 fields, got 3"},
+		{name: "blank first line", input: "\n" + header, want: Qrels{}},
 		{name: "too few fields", input: header + "q1\ta", wantErr: "line 2: expected 3"},
 		{name: "too many fields", input: header + "q1\ta\t1\textra", wantErr: "line 2: expected 3"},
 		{name: "spaces instead of tabs", input: header + "q1 a 1", wantErr: "line 2: expected 3"},
@@ -199,4 +199,39 @@ func FuzzReadQrels(f *testing.F) {
 	f.Fuzz(func(t *testing.T, input string) {
 		_, _ = ReadQrels(strings.NewReader(input))
 	})
+}
+
+func TestReadQrelsTREC(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    Qrels
+		wantErr string
+	}{
+		{name: "good file", input: "q1 0 a 1\nq2 0 b 0\nq1 0 c -1\n", want: Qrels{"q1": {"a": 1, "c": -1}, "q2": {"b": 0}}},
+		{name: "tabs and spaces", input: "q1\t0\ta\t2\r\n q2 ignored b 1", want: Qrels{"q1": {"a": 2}, "q2": {"b": 1}}},
+		{name: "blank lines", input: "\n \t\nq1 0 a 1\n\n \t\n", want: Qrels{"q1": {"a": 1}}},
+		{name: "duplicate judgment", input: "q1 0 a 1\nq1 0 a 2\n", want: Qrels{"q1": {"a": 2}}},
+		{name: "three fields", input: "q1 a 1\n", wantErr: "line 1: expected 4 fields, got 3"},
+		{name: "five fields", input: "q1 0 a 1 extra\n", wantErr: "line 1: expected 4 fields, got 5"},
+		{name: "bad grade", input: "q1 0 a bad\n", wantErr: "line 1: invalid grade:"},
+		{name: "fractional grade", input: "q1 0 a 1.5\n", wantErr: "line 1: invalid grade:"},
+		{name: "line number", input: "\nq1 0 a 1\n\nq2 0 b bad", wantErr: "line 4: invalid grade:"},
+		{name: "blank input", input: "\n \t\n", wantErr: "line 1: missing qrels"},
+		{name: "BEIR after blanks", input: "\n \t\nquery-id\tcorpus-id\tscore\nq1\ta\t1", want: Qrels{"q1": {"a": 1}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ReadQrels(strings.NewReader(tt.input))
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("ReadQrels() error = %v, want %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil || !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("ReadQrels() = %v, %v, want %v", got, err, tt.want)
+			}
+		})
+	}
 }

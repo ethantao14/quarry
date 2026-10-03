@@ -199,6 +199,12 @@ runs in parallel, as a pipeline inside `corpus.Read`:
   builder sees exactly the records it would have seen sequentially before the error. On any error,
   `Read` closes a `done` channel and waits for every goroutine to exit before returning.
 
+- **Two input formats share the pipeline.** BEIR JSONL and MS MARCO style TSV (`id<TAB>text`, chosen by
+  the `.tsv` extension) differ only in the function that produces the next record. The TSV reader
+  copies each ID with `strings.Clone`: a substring shares its parent's memory, so an index that kept
+  substring IDs would also keep every full passage alive. On MS MARCO that cost about 1.2 GB of peak
+  memory (3.9 GB versus 2.7 GB).
+
 The alternative was sharded accumulators: each worker builds its own partial index, merged at every
 flush. That would also parallelize adding postings, but doc IDs must still follow input order and the
 memory budget would be split across shards. With the pipeline, decoding and adding postings remain

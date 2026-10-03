@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/ethantao14/quarry/internal/analysis"
@@ -409,4 +410,205 @@ func BenchmarkRead(b *testing.B) {
 			}
 		})
 	}
+}
+
+func TestReadTSV(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		wantIDs   []string
+		wantTerms [][]string
+		wantErr   string
+	}{
+		{name: "empty"},
+		{name: "good lines", input: "a\tRED fish!\nb\tBlue fish\n", wantIDs: []string{"a", "b"}, wantTerms: [][]string{{"red", "fish"}, {"blue", "fish"}}},
+		{name: "tab inside text", input: "a\tred\tfish\n", wantIDs: []string{"a"}, wantTerms: [][]string{{"red", "fish"}}},
+		{name: "CRLF", input: "a\tred\r\nb\tfish\r\n", wantIDs: []string{"a", "b"}, wantTerms: [][]string{{"red"}, {"fish"}}},
+		{name: "no final newline", input: "a\tfish", wantIDs: []string{"a"}, wantTerms: [][]string{{"fish"}}},
+		{name: "blank lines", input: "\n\r\na\tfish\n\n", wantIDs: []string{"a"}, wantTerms: [][]string{{"fish"}}},
+		{name: "empty text", input: "a\t\n", wantIDs: []string{"a"}, wantTerms: [][]string{nil}},
+		{name: "missing tab", input: "\na fish\n", wantErr: "line 2: missing tab"},
+		{name: "empty id", input: "\tfish\n", wantErr: "line 1: id is empty"},
+		{name: "invalid UTF-8 text", input: "a\t\xff", wantErr: "line 1: invalid UTF-8"},
+		{name: "invalid UTF-8 id", input: "\xff\tfish", wantErr: "line 1: invalid UTF-8"},
+		{name: "whitespace is not empty", input: " \n", wantErr: "line 1: missing tab"},
+		{name: "error after blank", input: "a\tfish\n\nbad", wantIDs: []string{"a"}, wantTerms: [][]string{{"fish"}}, wantErr: "line 3: missing tab"},
+	}
+	for _, workers := range []int{1, 4} {
+		t.Run(fmt.Sprintf("workers=%d", workers), func(t *testing.T) {
+			for _, tt := range tests {
+				t.Run(tt.name, func(t *testing.T) {
+					var ids []string
+					var terms [][]string
+					err := ReadTSV(strings.NewReader(tt.input), workers, func(id string, analyzed []string) error {
+						ids = append(ids, id)
+						terms = append(terms, analyzed)
+						return nil
+					})
+					if tt.wantErr != "" {
+						if err == nil || err.Error() != tt.wantErr {
+							t.Fatalf("ReadTSV() error = %v, want %q", err, tt.wantErr)
+						}
+					} else if err != nil {
+						t.Fatal(err)
+					}
+					if !slices.Equal(ids, tt.wantIDs) {
+						t.Fatalf("IDs = %v, want %v", ids, tt.wantIDs)
+					}
+					for i := range terms {
+						if !slices.Equal(terms[i], tt.wantTerms[i]) {
+							t.Errorf("record %d terms = %v, want %v", i+1, terms[i], tt.wantTerms[i])
+						}
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestReadTSVErrorsKeepOrder(t *testing.T) {
+	var input strings.Builder
+	for i := range 50 {
+		fmt.Fprintf(&input, "d%d\tRunning by the river.\n", i)
+	}
+	for _, workers := range []int{1, 4} {
+		for _, stopAt := range []int{0, 37} {
+			t.Run(fmt.Sprintf("workers=%d/stop=%d", workers, stopAt), func(t *testing.T) {
+				calls := 0
+				visitErr := errors.New("visitor stopped")
+				err := ReadTSV(strings.NewReader(input.String()+"bad"), workers, func(id string, terms []string) error {
+					if want := fmt.Sprintf("d%d", calls); id != want {
+						t.Errorf("ID = %q, want %q", id, want)
+					}
+					calls++
+					if calls == stopAt {
+						return visitErr
+					}
+					return nil
+				})
+				if stopAt == 0 {
+					if calls != 50 || err == nil || err.Error() != "line 51: missing tab" {
+						t.Fatalf("ReadTSV() error = %v, visits = %d", err, calls)
+					}
+				} else if calls != stopAt || !errors.Is(err, visitErr) || err.Error() != "line 37: visitor stopped" {
+					t.Fatalf("ReadTSV() error = %v, visits = %d", err, calls)
+				}
+			})
+		}
+	}
+}
+
+func TestReadTSVReadError(t *testing.T) {
+	for _, workers := range []int{1, 4} {
+		for _, stop := range []bool{false, true} {
+			t.Run(fmt.Sprintf("workers=%d/stop=%t", workers, stop), func(t *testing.T) {
+				reader := io.MultiReader(strings.NewReader("\na\tfish\n"), iotest.ErrReader(io.ErrUnexpectedEOF))
+				calls := 0
+				visitErr := errors.New("visitor stopped")
+				err := ReadTSV(reader, workers, func(string, []string) error {
+					calls++
+					if stop {
+						return visitErr
+					}
+					return nil
+				})
+				wantErr, wantText := io.ErrUnexpectedEOF, "line 3: unexpected EOF"
+				if stop {
+					wantErr, wantText = visitErr, "line 2: visitor stopped"
+				}
+				if !errors.Is(err, wantErr) || err.Error() != wantText || calls != 1 {
+					t.Fatalf("ReadTSV() error = %v, visits = %d", err, calls)
+				}
+			})
+		}
+	}
+}
+
+func TestReadTSVLongLine(t *testing.T) {
+	text := strings.Repeat("fish ", 250000)
+	for _, workers := range []int{1, 4} {
+		t.Run(fmt.Sprintf("workers=%d", workers), func(t *testing.T) {
+			calls := 0
+			err := ReadTSV(strings.NewReader("a\t"+text+"\n"), workers, func(id string, terms []string) error {
+				calls++
+				if id != "a" || len(terms) != 250000 {
+					t.Fatalf("ID = %q, terms = %d", id, len(terms))
+				}
+				for _, term := range terms {
+					if term != "fish" {
+						t.Fatalf("term = %q, want fish", term)
+					}
+				}
+				return nil
+			})
+			if err != nil || calls != 1 {
+				t.Fatalf("ReadTSV() error = %v, visits = %d", err, calls)
+			}
+		})
+	}
+}
+
+func TestReadFileFormat(t *testing.T) {
+	inputs := map[string]string{
+		".jsonl": "{\"_id\":\"a\",\"title\":\"\",\"text\":\"RED fish!\"}\n{\"_id\":\"b\",\"title\":\"\",\"text\":\"Blue\\tfish\"}\n{\"_id\":\"c\",\"title\":\"\",\"text\":\"\"}\n",
+		".tsv":   "a\tRED fish!\nb\tBlue\tfish\nc\t\n",
+		".TSV":   "a\tRED fish!\nb\tBlue\tfish\nc\t\n",
+	}
+	for ext, input := range inputs {
+		for _, workers := range []int{1, 4} {
+			t.Run(fmt.Sprintf("%s/workers=%d", ext, workers), func(t *testing.T) {
+				path := filepath.Join(t.TempDir(), "corpus"+ext)
+				if err := os.WriteFile(path, []byte(input), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				wantIDs := []string{"a", "b", "c"}
+				wantTerms := [][]string{{"red", "fish"}, {"blue", "fish"}, nil}
+				calls := 0
+				err := ReadFile(path, workers, func(id string, terms []string) error {
+					if calls >= len(wantIDs) {
+						t.Fatal("too many visits")
+					}
+					if id != wantIDs[calls] || !slices.Equal(terms, wantTerms[calls]) {
+						t.Errorf("document %d = (%q, %v), want (%q, %v)", calls, id, terms, wantIDs[calls], wantTerms[calls])
+					}
+					calls++
+					return nil
+				})
+				if err != nil || calls != 3 {
+					t.Fatalf("ReadFile() error = %v, visits = %d", err, calls)
+				}
+			})
+		}
+	}
+}
+
+// TestReadTSVIDsDoNotRetainLines keeps only the IDs of long lines and checks the
+// lines themselves can be garbage collected.
+func TestReadTSVIDsDoNotRetainLines(t *testing.T) {
+	const lines, lineSize = 200, 100_000
+	var input strings.Builder
+	for i := range lines {
+		fmt.Fprintf(&input, "d%d\t%s\n", i, strings.Repeat("x", lineSize))
+	}
+	data := input.String()
+	var ids []string
+	runtime.GC()
+	var before runtime.MemStats
+	runtime.ReadMemStats(&before)
+	err := ReadTSV(strings.NewReader(data), 2, func(id string, _ []string) error {
+		ids = append(ids, id)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.GC()
+	var after runtime.MemStats
+	runtime.ReadMemStats(&after)
+	retained := int64(after.HeapAlloc) - int64(before.HeapAlloc)
+	if retained > lines*lineSize/10 {
+		t.Fatalf("keeping %d IDs retained %d heap bytes, want under %d", len(ids), retained, lines*lineSize/10)
+	}
+	runtime.KeepAlive(ids)
+	runtime.KeepAlive(data)
 }

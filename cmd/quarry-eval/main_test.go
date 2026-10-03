@@ -18,8 +18,12 @@ func TestRunFlags(t *testing.T) {
 	}{
 		{name: "help", args: []string{"-h"}},
 		{name: "unknown flag", args: []string{"--nope"}, wantErr: "flag provided but not defined"},
-		{name: "no arguments", wantErr: "--dataset is required"},
-		{name: "missing dataset", args: []string{"--run", "unused.trec"}, wantErr: "--dataset is required"},
+		{name: "no arguments", wantErr: "--dataset is required unless --index, --queries, and --qrels are all set"},
+		{name: "missing dataset", args: []string{"--run", "unused.trec"}, wantErr: "--dataset is required unless --index, --queries, and --qrels are all set"},
+		{name: "missing corpus source", args: []string{"--queries", "queries.tsv", "--qrels", "qrels.tsv"}, wantErr: "--dataset is required unless --index, --queries, and --qrels are all set"},
+		{name: "missing queries path", args: []string{"--index", "idx", "--qrels", "qrels.tsv"}, wantErr: "--dataset is required unless --index, --queries, and --qrels are all set"},
+		{name: "missing qrels path", args: []string{"--index", "idx", "--queries", "queries.tsv"}, wantErr: "--dataset is required unless --index, --queries, and --qrels are all set"},
+		{name: "explicit paths missing run", args: []string{"--index", "idx", "--queries", "queries.tsv", "--qrels", "qrels.tsv"}, wantErr: "--run is required"},
 		{name: "missing run", args: []string{"--dataset", "testdata/tiny"}, wantErr: "--run is required"},
 		{name: "zero k", args: []string{"--dataset", "testdata/tiny", "--run", "unused.trec", "--k", "0"}, wantErr: "--k must be at least 1"},
 		{name: "negative k", args: []string{"--dataset", "testdata/tiny", "--run", "unused.trec", "--k", "-1"}, wantErr: "--k must be at least 1"},
@@ -205,6 +209,76 @@ func TestRunDataset(t *testing.T) {
 			}
 			if got := stdout.String(); got != tt.wantStdout {
 				t.Errorf("run(%q) stdout = %q, want %q", args, got, tt.wantStdout)
+			}
+		})
+	}
+}
+
+func TestRunExplicitPaths(t *testing.T) {
+	root := t.TempDir()
+	for name, contents := range map[string]string{
+		"corpus.jsonl":          "{\"_id\":\"a\",\"text\":\"fish\"}\n{\"_id\":\"b\",\"text\":\"fish\"}\n{\"_id\":\"c\",\"text\":\"bird\"}\n",
+		"queries.jsonl":         "{\"_id\":\"q1\",\"text\":\"Fish?\"}\n{\"_id\":\"q2\",\"text\":\"BIRD!\"}\n",
+		"qrels/test.tsv":        "query-id\tcorpus-id\tscore\nq1\ta\t1\nq1\tb\t0\nq2\tc\t1\n",
+		"queries.dev.small.tsv": "q1\tFish?\nq2\tBIRD!\n",
+		"qrels.dev.small.tsv":   "q1\t0\ta\t1\nq1\t0\tb\t0\nq2\t0\tc\t1\n",
+	} {
+		path := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ix, err := corpus.LoadFile(filepath.Join(root, "corpus.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexPath := filepath.Join(root, "idx")
+	if err := ix.Write(indexPath); err != nil {
+		t.Fatal(err)
+	}
+	queriesPath := filepath.Join(root, "queries.dev.small.tsv")
+	qrelsPath := filepath.Join(root, "qrels.dev.small.tsv")
+	var baselineRun []byte
+	var baselineStdout string
+	for _, tt := range []struct {
+		name string
+		args []string
+	}{
+		{name: "BEIR", args: []string{"--dataset", root}},
+		{name: "explicit paths without dataset", args: []string{"--index", indexPath, "--queries", queriesPath, "--qrels", qrelsPath}},
+		{name: "override queries", args: []string{"--dataset", root, "--queries", queriesPath}},
+		{name: "override qrels", args: []string{"--dataset", root, "--qrels", qrelsPath}},
+		{name: "override both", args: []string{"--dataset", root, "--queries", queriesPath, "--qrels", qrelsPath}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			runPath := filepath.Join(t.TempDir(), "run.trec")
+			args := append([]string{"--run", runPath}, tt.args...)
+			var stdout, stderr bytes.Buffer
+			if err := run(args, &stdout, &stderr); err != nil {
+				t.Fatal(err)
+			}
+			if stderr.Len() != 0 {
+				t.Fatalf("stderr = %q, want empty", stderr.String())
+			}
+			data, err := os.ReadFile(runPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(data) == 0 {
+				t.Fatal("run file is empty")
+			}
+			if tt.name == "BEIR" {
+				baselineRun, baselineStdout = data, stdout.String()
+				return
+			}
+			if !bytes.Equal(data, baselineRun) {
+				t.Errorf("run = %q, want %q", data, baselineRun)
+			}
+			if stdout.String() != baselineStdout {
+				t.Errorf("stdout = %q, want %q", stdout.String(), baselineStdout)
 			}
 		})
 	}

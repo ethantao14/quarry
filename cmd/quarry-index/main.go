@@ -1,4 +1,5 @@
-// Command quarry-index saves a searchable index from a BEIR JSONL corpus.
+// Command quarry-index saves an index from BEIR JSONL,
+// or TSV (id<TAB>text) when the corpus file ends in .tsv.
 package main
 
 import (
@@ -11,6 +12,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ethantao14/quarry/internal/corpus"
 	"github.com/ethantao14/quarry/internal/index"
@@ -27,7 +29,7 @@ func main() {
 func run(args []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("quarry-index", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	corpusPath := flags.String("corpus", "", "path to a BEIR JSONL corpus")
+	corpusPath := flags.String("corpus", "", "path to a BEIR JSONL corpus, or .tsv (id<TAB>text)")
 	out := flags.String("out", "", "path to a new index directory")
 	memBudget := flags.String("mem-budget", "1GB", "chunk memory budget in bytes, KB, MB, or GB")
 	workers := flags.Int("workers", runtime.GOMAXPROCS(0), "number of goroutines that analyze documents")
@@ -51,7 +53,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	start := time.Now()
 	segments, err := build(*corpusPath, *out, budget, *workers)
+	elapsed := time.Since(start)
 	if err != nil {
 		return err
 	}
@@ -60,6 +64,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	docCount, termCount := disk.DocCount(), disk.TermCount()
+	postingCount := disk.PostingCount()
 	if err := disk.Close(); err != nil {
 		return err
 	}
@@ -67,15 +72,26 @@ func run(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("read index directory: %w", err)
 	}
-	var size int64
+	var size, postingsSize int64
 	for _, file := range files {
 		info, err := file.Info()
 		if err != nil {
 			return fmt.Errorf("stat %s: %w", file.Name(), err)
 		}
 		size += info.Size()
+		if file.Name() == "seg0.post" {
+			postingsSize = info.Size()
+		}
 	}
-	_, err = fmt.Fprintf(stdout, "docs\t%d\nterms\t%d\nsegments\t%d\nbytes\t%d\n", docCount, termCount, segments, size)
+	var docsPerSecond, bitsPerPosting float64
+	if docCount > 0 {
+		docsPerSecond = float64(docCount) / elapsed.Seconds()
+	}
+	if postingCount > 0 {
+		bitsPerPosting = 8 * float64(postingsSize) / float64(postingCount)
+	}
+	_, err = fmt.Fprintf(stdout, "docs\t%d\nterms\t%d\npostings\t%d\nsegments\t%d\nbytes\t%d\nseconds\t%.2f\ndocs_per_second\t%.0f\nbits_per_posting\t%.2f\n",
+		docCount, termCount, postingCount, segments, size, elapsed.Seconds(), docsPerSecond, bitsPerPosting)
 	return err
 }
 

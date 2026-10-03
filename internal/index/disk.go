@@ -18,13 +18,14 @@ import (
 // Disk reads an immutable index from memory-mapped binary files.
 // Its methods return owned data: Postings decodes into new memory and ExternalID copies into a string.
 type Disk struct {
-	dict       []byte
-	post       []byte
-	lens       []byte
-	ids        []byte
-	docCount   uint32
-	termCount  uint32
-	totalTerms uint64
+	dict         []byte
+	post         []byte
+	lens         []byte
+	ids          []byte
+	docCount     uint32
+	termCount    uint32
+	totalTerms   uint64
+	postingCount uint64
 }
 
 // Open memory-maps and validates an index directory without decoding its tables.
@@ -150,6 +151,7 @@ func (d *Disk) validateDict() error {
 	blobLen := uint64(len(d.dict)) - d.termBlobStart()
 	postLen := uint64(len(d.post))
 	var previous []byte
+	d.postingCount = 0
 	for i := uint32(0); i < d.termCount; i++ {
 		entry := d.entry(i)
 		if uint64(entry.termOffset)+uint64(entry.termLen) > blobLen {
@@ -167,6 +169,7 @@ func (d *Disk) validateDict() error {
 		if entry.docFreq == 0 || entry.docFreq > d.docCount {
 			return fmt.Errorf("%s: entry %d invalid document frequency", dictName, i)
 		}
+		d.postingCount += uint64(entry.docFreq)
 	}
 	return nil
 }
@@ -295,4 +298,9 @@ func (d *Disk) ExternalID(docID uint32) string {
 // TermCount returns the number of distinct terms in the index.
 func (d *Disk) TermCount() int {
 	return int(d.termCount)
+}
+
+// PostingCount returns the number of term-document postings in the index.
+func (d *Disk) PostingCount() uint64 {
+	return d.postingCount
 }

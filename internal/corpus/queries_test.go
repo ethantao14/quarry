@@ -1,11 +1,14 @@
 package corpus
 
 import (
+	"errors"
+	"io"
 	"maps"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/iotest"
 )
 
 func TestReadQueries(t *testing.T) {
@@ -86,5 +89,71 @@ func TestLoadQueries(t *testing.T) {
 				t.Errorf("LoadQueries(%q) = %v, want %v", path, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestReadQueriesTSV(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    map[string]string
+		wantErr string
+	}{
+		{name: "empty", want: map[string]string{}},
+		{name: "good lines", input: "q1\tRED fish?\nq2\tCafé\n", want: map[string]string{"q1": "RED fish?", "q2": "Café"}},
+		{name: "tabs preserved", input: "q1\tfish\tblue\t\n", want: map[string]string{"q1": "fish\tblue\t"}},
+		{name: "CRLF", input: "q1\tfish\r\n", want: map[string]string{"q1": "fish"}},
+		{name: "no final newline", input: "q1\tfish", want: map[string]string{"q1": "fish"}},
+		{name: "blank lines", input: "\n\r\nq1\tfish\n\n", want: map[string]string{"q1": "fish"}},
+		{name: "empty text", input: "q1\t", want: map[string]string{"q1": ""}},
+		{name: "duplicate id", input: "q1\tfirst\nq1\tlast\n", want: map[string]string{"q1": "last"}},
+		{name: "strip one CR", input: "q1\tfish\r\r\n", want: map[string]string{"q1": "fish\r"}},
+		{name: "missing tab", input: "q1 fish", wantErr: "line 1: missing tab"},
+		{name: "empty id", input: "\tfish", wantErr: "line 1: id is empty"},
+		{name: "invalid UTF-8", input: "q1\t\xff", wantErr: "line 1: invalid UTF-8"},
+		{name: "invalid UTF-8 id", input: "\xff\tfish", wantErr: "line 1: invalid UTF-8"},
+		{name: "line number", input: "q1\tfish\n\ninvalid", wantErr: "line 3: missing tab"},
+		{name: "long line", input: "q1\t" + strings.Repeat("fish ", 250000), want: map[string]string{"q1": strings.Repeat("fish ", 250000)}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, format := range []string{"reader", ".tsv", ".TSV"} {
+				t.Run(format, func(t *testing.T) {
+					var got map[string]string
+					var err error
+					var path string
+					if format == "reader" {
+						got, err = ReadQueriesTSV(strings.NewReader(tt.input))
+					} else {
+						path = filepath.Join(t.TempDir(), "queries"+format)
+						if err := os.WriteFile(path, []byte(tt.input), 0o600); err != nil {
+							t.Fatal(err)
+						}
+						got, err = LoadQueries(path)
+					}
+					if tt.wantErr != "" {
+						want := tt.wantErr
+						if path != "" {
+							want = "load queries " + path + ": " + want
+						}
+						if err == nil || err.Error() != want {
+							t.Fatalf("error = %v, want %q", err, want)
+						}
+						return
+					}
+					if err != nil || !maps.Equal(got, tt.want) {
+						t.Fatalf("queries differ, error = %v", err)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestReadQueriesTSVReadError(t *testing.T) {
+	reader := io.MultiReader(strings.NewReader("q1\tfish\n\n"), iotest.ErrReader(io.ErrUnexpectedEOF))
+	_, err := ReadQueriesTSV(reader)
+	if !errors.Is(err, io.ErrUnexpectedEOF) || err.Error() != "line 3: unexpected EOF" {
+		t.Fatalf("ReadQueriesTSV() error = %v", err)
 	}
 }
