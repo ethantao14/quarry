@@ -51,13 +51,13 @@ for w in "${workers[@]}"; do
         out="$bench_dir/idx-w$w"
         rm -rf "$out"
         log="$bench_dir/time-w$w.log"
-        start=$(date +%s%N)
         /usr/bin/time "$time_flag" "$repo_root/bin/quarry-index" --corpus "$corpus" --out "$out" --workers "$w" > /dev/null 2> "$log"
-        end=$(date +%s%N)
-        seconds+=("$(awk -v ns=$((end - start)) 'BEGIN { printf "%.2f", ns / 1e9 }')")
         if [[ $time_flag == -l ]]; then
+            seconds+=("$(awk '$2 == "real" { print $1 }' "$log")")
             rss+=("$(awk '/maximum resident set size/ { printf "%.0f", $1 / 1048576 }' "$log")")
         else
+            # GNU time prints elapsed time as [h:]m:ss.ss.
+            seconds+=("$(awk -F': ' '/Elapsed \(wall clock\)/ { n = split($2, t, ":"); s = 0; for (i = 1; i <= n; i++) s = s * 60 + t[i]; printf "%.2f", s }' "$log")")
             rss+=("$(awk -F: '/Maximum resident set size/ { printf "%.0f", $2 / 1024 }' "$log")")
         fi
         rm -rf "$out"
