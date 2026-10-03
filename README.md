@@ -41,7 +41,10 @@ To index a corpus larger than memory, cap the memory used for collecting posting
 reached, quarry writes what it has as a temporary segment and continues; at the end it merges the
 segments into one index. The result is byte-for-byte the same for any budget. The budget is an
 estimate of postings memory, not a hard limit on the whole process (see
-[docs/DESIGN.md](docs/DESIGN.md#indexing-within-a-memory-budget)). Use exactly one of `--corpus` or `--index` when
+[docs/DESIGN.md](docs/DESIGN.md#indexing-within-a-memory-budget)).
+
+Text analysis runs on `--workers` goroutines (default: the number of CPUs Go uses). The index is
+byte-for-byte the same for any worker count. Use exactly one of `--corpus` or `--index` when
 searching. Results from a saved index are identical to searching the corpus directly. Saved indexes
 are memory-mapped, which works on macOS and Linux. The format is
 described in [docs/DESIGN.md](docs/DESIGN.md#on-disk-index-format).
@@ -96,6 +99,25 @@ To check it yourself, build trec_eval and run:
 tail -n +2 data/beir/scifact/qrels/test.tsv | awk -F'\t' '{print $1" 0 "$2" "$3}' > runs/scifact.qrels
 trec_eval -c -m ndcg_cut.10 runs/scifact.qrels runs/scifact.trec
 ```
+
+### Indexing speed
+
+`scripts/bench-workers.sh` builds an index from SciFact repeated 20 times (103,660 documents,
+162 MB) and reports the median wall time of 3 runs for each worker count. Measured on an Apple M3
+(4 performance and 4 efficiency cores, 16 GB RAM, macOS), default budget, warm page cache:
+
+| Workers | Seconds | Speedup vs. sequential | Peak memory |
+|--------:|--------:|-----------------------:|------------:|
+| sequential (before `--workers`) | 10.5 | 1.0x | 243 MB |
+| 1 | 8.94 | 1.2x | 247 MB |
+| 2 | 4.69 | 2.2x | 240 MB |
+| 3 | 3.58 | 2.9x | 247 MB |
+| 4 | 3.11 | 3.4x | 245 MB |
+| 6 | 2.94 | 3.6x | 246 MB |
+| 8 | 2.51 | 4.2x | 250 MB |
+
+Before this change, analysis took about 78% of the build time; JSON decoding (about 3%) and adding
+postings (about 18%) still run on one goroutine each, which limits the speedup to roughly 4.4x.
 
 ## Development
 

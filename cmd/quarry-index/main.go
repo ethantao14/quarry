@@ -8,6 +8,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 
@@ -29,6 +30,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	corpusPath := flags.String("corpus", "", "path to a BEIR JSONL corpus")
 	out := flags.String("out", "", "path to a new index directory")
 	memBudget := flags.String("mem-budget", "1GB", "chunk memory budget in bytes, KB, MB, or GB")
+	workers := flags.Int("workers", runtime.GOMAXPROCS(0), "number of goroutines that analyze documents")
 	err := flags.Parse(args)
 	if errors.Is(err, flag.ErrHelp) {
 		return nil
@@ -42,11 +44,14 @@ func run(args []string, stdout, stderr io.Writer) error {
 	if *out == "" {
 		return errors.New("--out is required")
 	}
+	if *workers < 1 {
+		return errors.New("--workers must be at least 1")
+	}
 	budget, err := parseSize(*memBudget)
 	if err != nil {
 		return err
 	}
-	segments, err := build(*corpusPath, *out, budget)
+	segments, err := build(*corpusPath, *out, budget, *workers)
 	if err != nil {
 		return err
 	}
@@ -76,12 +81,12 @@ func run(args []string, stdout, stderr io.Writer) error {
 
 // build indexes the corpus into out. On failure it removes the partial index, so
 // a rerun can start clean. Abort removes only the directory NewBuilder created.
-func build(corpusPath, out string, budget int64) (int, error) {
+func build(corpusPath, out string, budget int64, workers int) (int, error) {
 	builder, err := index.NewBuilder(out, budget)
 	if err != nil {
 		return 0, err
 	}
-	err = corpus.ReadFile(corpusPath, builder.Add)
+	err = corpus.ReadFile(corpusPath, workers, builder.Add)
 	if err == nil {
 		err = builder.Finish()
 	}

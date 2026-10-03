@@ -29,6 +29,8 @@ func TestRunFlags(t *testing.T) {
 		{name: "missing corpus", args: []string{"--out", "unused"}, wantErr: "--corpus is required"},
 		{name: "nonexistent corpus", args: []string{"--corpus", "testdata/nonexistent.jsonl", "--out", tempOut}, wantErr: "open corpus"},
 		{name: "existing out", args: []string{"--corpus", "testdata/tiny.jsonl", "--out", "testdata"}, wantErr: "already exists"},
+		{name: "zero workers", args: []string{"--corpus", "testdata/tiny.jsonl", "--out", tempOut, "--workers", "0"}, wantErr: "--workers must be at least 1"},
+		{name: "negative workers", args: []string{"--corpus", "testdata/tiny.jsonl", "--out", tempOut, "--workers", "-2"}, wantErr: "--workers must be at least 1"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -210,18 +212,7 @@ func TestRunMemoryBudgets(t *testing.T) {
 			if docs != 80 || terms != 3 || size <= 0 || (budget == "" && segments != 0) || (budget != "" && segments <= 0) {
 				t.Fatalf("unexpected stdout: %q", stdout.String())
 			}
-			files, err := os.ReadDir(out)
-			if err != nil {
-				t.Fatal(err)
-			}
-			got := make(map[string][]byte)
-			for _, file := range files {
-				data, err := os.ReadFile(filepath.Join(out, file.Name()))
-				if err != nil {
-					t.Fatal(err)
-				}
-				got[file.Name()] = data
-			}
+			got := readIndexFiles(t, out)
 			if baseline == nil {
 				baseline = got
 				return
@@ -230,10 +221,75 @@ func TestRunMemoryBudgets(t *testing.T) {
 				t.Fatalf("file count = %d, want %d", len(got), len(baseline))
 			}
 			for name, data := range baseline {
-				if !bytes.Equal(got[name], data) {
+				if actual, ok := got[name]; !ok || !bytes.Equal(actual, data) {
 					t.Errorf("%s differs across budgets", name)
 				}
 			}
 		})
 	}
+}
+
+func TestRunWorkers(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "corpus.jsonl")
+	texts := []string{
+		"Red fish swim in the river.",
+		"Running runners follow winding trails!",
+		"Blue birds and quiet gardens.",
+		"Scientists study distant stars and planets.",
+		"Builders repair old bridges by the harbor.",
+	}
+	var input strings.Builder
+	for i := range 300 {
+		text := strings.Repeat(texts[i%len(texts)]+" ", i%11+1)
+		fmt.Fprintf(&input, "{\"_id\":\"d%d\",\"title\":\"Observation %d\",\"text\":%q}\n", i, i, text)
+	}
+	if err := os.WriteFile(path, []byte(input.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var baseline map[string][]byte
+	for _, workers := range []int{1, 2, 7} {
+		for _, budget := range []string{"", "1KB"} {
+			t.Run(fmt.Sprintf("workers=%d/budget=%s", workers, budget), func(t *testing.T) {
+				out := filepath.Join(t.TempDir(), "idx")
+				args := []string{"--corpus", path, "--out", out, "--workers", strconv.Itoa(workers)}
+				if budget != "" {
+					args = append(args, "--mem-budget", budget)
+				}
+				var stdout, stderr bytes.Buffer
+				if err := run(args, &stdout, &stderr); err != nil {
+					t.Fatal(err)
+				}
+				got := readIndexFiles(t, out)
+				if workers == 1 && budget == "" {
+					baseline = got
+					return
+				}
+				if len(got) != len(baseline) {
+					t.Fatalf("file count = %d, want %d", len(got), len(baseline))
+				}
+				for name, data := range baseline {
+					if actual, ok := got[name]; !ok || !bytes.Equal(actual, data) {
+						t.Errorf("%s differs from workers=1 with default budget", name)
+					}
+				}
+			})
+		}
+	}
+}
+
+func readIndexFiles(t *testing.T, dir string) map[string][]byte {
+	t.Helper()
+	files, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents := make(map[string][]byte)
+	for _, file := range files {
+		data, err := os.ReadFile(filepath.Join(dir, file.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		contents[file.Name()] = data
+	}
+	return contents
 }
