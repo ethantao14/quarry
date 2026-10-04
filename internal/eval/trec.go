@@ -8,43 +8,67 @@ import (
 	"strings"
 )
 
-// ReadQrels reads BEIR relevance judgments with a query-id, corpus-id, score TSV header.
+const beirQrelsHeader = "query-id\tcorpus-id\tscore"
+
+// ReadQrels reads BEIR judgments with a query-id, corpus-id, score TSV header,
+// or four-field TREC qrels without a header. Blank lines are skipped.
 func ReadQrels(r io.Reader) (Qrels, error) {
 	scanner := bufio.NewScanner(r)
-	if !scanner.Scan() {
-		if err := scanner.Err(); err != nil {
-			return nil, fmt.Errorf("line 1: %w", err)
-		}
-		return nil, fmt.Errorf("line 1: missing qrels header")
-	}
-	if scanner.Text() != "query-id\tcorpus-id\tscore" {
-		return nil, fmt.Errorf("line 1: expected query-id\tcorpus-id\tscore header")
-	}
 	qrels := make(Qrels)
-	lineNumber := 1
+	lineNumber := 0
+	// The first non-blank line decides the format.
+	var parseLine func(line string) (queryID, docID, grade string, err error)
 	for scanner.Scan() {
 		lineNumber++
 		line := scanner.Text()
-		if line == "" {
+		if strings.TrimSpace(line) == "" {
 			continue
 		}
-		fields := strings.Split(line, "\t")
-		if len(fields) != 3 {
-			return nil, fmt.Errorf("line %d: expected 3 tab-separated fields, got %d", lineNumber, len(fields))
+		if parseLine == nil {
+			if line == beirQrelsHeader {
+				parseLine = parseBEIRQrel
+				continue
+			}
+			parseLine = parseTRECQrel
 		}
-		grade, err := strconv.Atoi(fields[2])
+		queryID, docID, gradeText, err := parseLine(line)
+		if err != nil {
+			return nil, fmt.Errorf("line %d: %w", lineNumber, err)
+		}
+		grade, err := strconv.Atoi(gradeText)
 		if err != nil {
 			return nil, fmt.Errorf("line %d: invalid grade: %w", lineNumber, err)
 		}
-		if qrels[fields[0]] == nil {
-			qrels[fields[0]] = make(map[string]int)
+		if qrels[queryID] == nil {
+			qrels[queryID] = make(map[string]int)
 		}
-		qrels[fields[0]][fields[1]] = grade
+		qrels[queryID][docID] = grade
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("line %d: %w", lineNumber+1, err)
 	}
+	if parseLine == nil {
+		return nil, fmt.Errorf("line 1: missing qrels header or data")
+	}
 	return qrels, nil
+}
+
+// parseBEIRQrel splits a query-id, corpus-id, score line.
+func parseBEIRQrel(line string) (queryID, docID, grade string, err error) {
+	fields := strings.Split(line, "\t")
+	if len(fields) != 3 {
+		return "", "", "", fmt.Errorf("expected 3 tab-separated fields, got %d", len(fields))
+	}
+	return fields[0], fields[1], fields[2], nil
+}
+
+// parseTRECQrel splits a query-id, iteration, doc-id, grade line; the iteration is ignored.
+func parseTRECQrel(line string) (queryID, docID, grade string, err error) {
+	fields := strings.Fields(line)
+	if len(fields) != 4 {
+		return "", "", "", fmt.Errorf("expected 4 fields, got %d", len(fields))
+	}
+	return fields[0], fields[2], fields[3], nil
 }
 
 // WriteRun writes entries in their given order as six-column TREC run lines.

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -144,7 +145,13 @@ func TestRunWritesIndex(t *testing.T) {
 	if disk.DocCount() != 3 {
 		t.Errorf("DocCount() = %d, want 3", disk.DocCount())
 	}
-	wantStdout := "docs\t3\nterms\t6\nsegments\t0\nbytes\t" + strconv.FormatInt(size, 10) + "\n"
+	stats := parseBuildStats(t, stdout.String())
+	postInfo, err := os.Stat(filepath.Join(out, "seg0.post"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantStdout := fmt.Sprintf("docs\t3\nterms\t6\npostings\t8\nsegments\t0\nbytes\t%d\nseconds\t%.2f\ndocs_per_second\t%.0f\nbits_per_posting\t%.2f\n",
+		size, stats.seconds, stats.docsPerSecond, 8*float64(postInfo.Size())/8)
 	if got := stdout.String(); got != wantStdout {
 		t.Errorf("stdout = %q, want %q", got, wantStdout)
 	}
@@ -204,12 +211,8 @@ func TestRunMemoryBudgets(t *testing.T) {
 			if err := run(args, &stdout, &stderr); err != nil {
 				t.Fatal(err)
 			}
-			var docs, terms, segments int
-			var size int64
-			if _, err := fmt.Sscanf(stdout.String(), "docs\t%d\nterms\t%d\nsegments\t%d\nbytes\t%d\n", &docs, &terms, &segments, &size); err != nil {
-				t.Fatal(err)
-			}
-			if docs != 80 || terms != 3 || size <= 0 || (budget == "" && segments != 0) || (budget != "" && segments <= 0) {
+			stats := parseBuildStats(t, stdout.String())
+			if stats.docs != 80 || stats.terms != 3 || stats.postings != 240 || stats.size <= 0 || (budget == "" && stats.segments != 0) || (budget != "" && stats.segments <= 0) {
 				t.Fatalf("unexpected stdout: %q", stdout.String())
 			}
 			got := readIndexFiles(t, out)
@@ -292,4 +295,97 @@ func readIndexFiles(t *testing.T, dir string) map[string][]byte {
 		contents[file.Name()] = data
 	}
 	return contents
+}
+
+type buildStats struct {
+	docs, terms, segments                  int
+	postings                               uint64
+	size                                   int64
+	seconds, docsPerSecond, bitsPerPosting float64
+}
+
+func parseBuildStats(t *testing.T, output string) buildStats {
+	t.Helper()
+	var stats buildStats
+	const scanFormat = "docs\t%d\nterms\t%d\npostings\t%d\nsegments\t%d\nbytes\t%d\nseconds\t%f\ndocs_per_second\t%f\nbits_per_posting\t%f\n"
+	n, err := fmt.Sscanf(output, scanFormat, &stats.docs, &stats.terms, &stats.postings, &stats.segments, &stats.size, &stats.seconds, &stats.docsPerSecond, &stats.bitsPerPosting)
+	if err != nil || n != 8 {
+		t.Fatalf("parse stdout %q: fields = %d, error = %v", output, n, err)
+	}
+	want := fmt.Sprintf("docs\t%d\nterms\t%d\npostings\t%d\nsegments\t%d\nbytes\t%d\nseconds\t%.2f\ndocs_per_second\t%.0f\nbits_per_posting\t%.2f\n",
+		stats.docs, stats.terms, stats.postings, stats.segments, stats.size, stats.seconds, stats.docsPerSecond, stats.bitsPerPosting)
+	if output != want {
+		t.Fatalf("stdout = %q, want format %q", output, want)
+	}
+	for _, value := range []float64{stats.seconds, stats.docsPerSecond, stats.bitsPerPosting} {
+		if math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
+			t.Fatalf("invalid numeric metric in %q", output)
+		}
+	}
+	if stats.docs > 0 && stats.docsPerSecond <= 0 {
+		t.Fatalf("docs_per_second must be positive: %q", output)
+	}
+	if stats.postings > 0 && stats.bitsPerPosting <= 0 {
+		t.Fatalf("bits_per_posting must be positive: %q", output)
+	}
+	return stats
+}
+
+func TestRunCorpusFormats(t *testing.T) {
+	var baseline map[string][]byte
+	for _, format := range []struct {
+		ext   string
+		input string
+	}{
+		{ext: ".jsonl", input: "{\"_id\":\"a\",\"title\":\"\",\"text\":\"red fish fish\"}\n{\"_id\":\"b\",\"title\":\"\",\"text\":\"blue\\tfish\"}\n{\"_id\":\"c\",\"title\":\"\",\"text\":\"\"}\n"},
+		{ext: ".tsv", input: "a\tred fish fish\nb\tblue\tfish\nc\t\n"},
+		{ext: ".TSV", input: "a\tred fish fish\nb\tblue\tfish\nc\t\n"},
+	} {
+		for _, budget := range []string{"1GB", "1"} {
+			t.Run(format.ext+"/budget="+budget, func(t *testing.T) {
+				root := t.TempDir()
+				path := filepath.Join(root, "corpus"+format.ext)
+				if err := os.WriteFile(path, []byte(format.input), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				out := filepath.Join(root, "idx")
+				var stdout, stderr bytes.Buffer
+				if err := run([]string{"--corpus", path, "--out", out, "--mem-budget", budget}, &stdout, &stderr); err != nil {
+					t.Fatal(err)
+				}
+				stats := parseBuildStats(t, stdout.String())
+				if stats.docs != 3 || stats.terms != 3 || stats.postings != 4 {
+					t.Fatalf("unexpected stdout: %q", stdout.String())
+				}
+				got := readIndexFiles(t, out)
+				if baseline == nil {
+					baseline = got
+					return
+				}
+				if len(got) != len(baseline) {
+					t.Fatalf("file count = %d, want %d", len(got), len(baseline))
+				}
+				for name, data := range baseline {
+					if actual, ok := got[name]; !ok || !bytes.Equal(actual, data) {
+						t.Errorf("%s differs across formats", name)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestRunEmptyCorpusStats(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "corpus.tsv")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{"--corpus", path, "--out", filepath.Join(t.TempDir(), "idx")}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	stats := parseBuildStats(t, stdout.String())
+	if stats.docs != 0 || stats.terms != 0 || stats.postings != 0 || stats.docsPerSecond != 0 || stats.bitsPerPosting != 0 {
+		t.Fatalf("unexpected empty corpus stats: %q", stdout.String())
+	}
 }

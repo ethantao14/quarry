@@ -390,3 +390,58 @@ func TestDiskConcurrentReads(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestDiskPostingCount(t *testing.T) {
+	docs := []builderDocument{
+		{id: "a", terms: []string{"red", "fish", "fish"}},
+		{id: "b", terms: []string{"blue", "fish"}},
+		{id: "c"},
+	}
+	for _, mode := range []string{"empty", "small", "merged"} {
+		t.Run(mode, func(t *testing.T) {
+			memory := New()
+			if mode != "empty" {
+				for _, doc := range docs {
+					memory.Add(doc.id, doc.terms)
+				}
+			}
+			dir := filepath.Join(t.TempDir(), "idx")
+			if mode == "merged" {
+				builder, err := NewBuilder(dir, 1)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, doc := range docs {
+					if err := builder.Add(doc.id, doc.terms); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err := builder.Finish(); err != nil {
+					t.Fatal(err)
+				}
+				if builder.Segments() < 2 {
+					t.Fatalf("Segments() = %d, want multiple segments", builder.Segments())
+				}
+			} else if err := memory.Write(dir); err != nil {
+				t.Fatal(err)
+			}
+			disk, err := Open(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cleanupDisk(t, disk)
+			var want, decoded uint64
+			for term, list := range memory.postings {
+				want += uint64(len(list))
+				got, err := disk.Postings(term)
+				if err != nil {
+					t.Fatal(err)
+				}
+				decoded += uint64(len(got))
+			}
+			if disk.PostingCount() != want || decoded != want {
+				t.Fatalf("PostingCount() = %d, decoded = %d, want %d", disk.PostingCount(), decoded, want)
+			}
+		})
+	}
+}

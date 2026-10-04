@@ -1,11 +1,14 @@
 package corpus
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"strings"
 )
 
 // ReadQueries reads BEIR JSONL queries and maps each _id to its text.
@@ -31,7 +34,23 @@ func ReadQueries(r io.Reader) (map[string]string, error) {
 	}
 }
 
-// LoadQueries opens a queries file and reads it with ReadQueries.
+// ReadQueriesTSV reads id<TAB>text queries, skipping empty lines.
+func ReadQueriesTSV(r io.Reader) (map[string]string, error) {
+	queries := make(map[string]string)
+	source := &tsvReader{reader: bufio.NewReader(r)}
+	for {
+		lineNumber, id, text, err := source.next()
+		if errors.Is(err, io.EOF) {
+			return queries, nil
+		}
+		if err != nil {
+			return nil, fmt.Errorf("line %d: %w", lineNumber, err)
+		}
+		queries[id] = text
+	}
+}
+
+// LoadQueries reads BEIR JSONL queries, or TSV when the file ends in .tsv.
 func LoadQueries(path string) (map[string]string, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -40,7 +59,11 @@ func LoadQueries(path string) (map[string]string, error) {
 	// The file is only read, so a failed Close cannot lose data.
 	defer func() { _ = file.Close() }()
 
-	queries, err := ReadQueries(file)
+	read := ReadQueries
+	if strings.EqualFold(filepath.Ext(path), ".tsv") {
+		read = ReadQueriesTSV
+	}
+	queries, err := read(file)
 	if err != nil {
 		return nil, fmt.Errorf("load queries %s: %w", path, err)
 	}

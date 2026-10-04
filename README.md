@@ -4,8 +4,9 @@ A full-text search engine written from scratch in Go. It builds an inverted inde
 results with BM25, and speeds up top-k retrieval with dynamic pruning (WAND and Block-Max WAND).
 It is evaluated on the public MS MARCO and BEIR benchmarks against published BM25 baselines.
 
-**Status:** English text analysis, BM25 search, evaluation, and saving an index to disk (read back
-with memory mapping) work. Indexing at MS MARCO scale and pruning are not implemented yet.
+**Status:** English text analysis, BM25 search, evaluation, and on-disk indexes (built within a
+memory budget, read back with memory mapping) work, including the full MS MARCO passage corpus.
+Dynamic pruning (WAND, Block-Max WAND) is not implemented yet.
 
 ## Requirements
 
@@ -21,7 +22,8 @@ go build -o bin/quarry-search ./cmd/quarry-search
 ./bin/quarry-search --corpus cmd/quarry-search/testdata/tiny.jsonl --k 2 fish
 ```
 
-Use a BEIR JSONL corpus with `_id`, `title`, and `text` fields. Results are tab-separated:
+Use a BEIR JSONL corpus with `_id`, `title`, and `text` fields, or a TSV file ending in `.tsv`
+with one `id<TAB>text` document per line (the MS MARCO format). Results are tab-separated:
 `rank` (1-based), `external document ID`, and `score` (four decimal places).
 
 To analyze the corpus once instead of on every search, save an index and search that:
@@ -32,8 +34,9 @@ go build -o bin/ ./cmd/...
 ./bin/quarry-search --index data/indexes/tiny --k 2 fish
 ```
 
-`quarry-index` prints the document count, distinct term count, number of temporary segments, and
-total index size in bytes. It refuses to overwrite an existing directory, and removes its partial
+`quarry-index` prints the document count, distinct term count, total postings, number of
+temporary segments, total index size in bytes, build time in seconds, documents per second, and
+bits per posting (postings file size divided by postings). It refuses to overwrite an existing directory, and removes its partial
 output if indexing fails.
 
 To index a corpus larger than memory, cap the memory used for collecting postings with
@@ -57,7 +60,19 @@ go run ./cmd/quarry-eval --dataset data/beir/scifact --run runs/scifact.trec --k
 ```
 
 The same works for NFCorpus: replace `scifact` with `nfcorpus` in both commands. To evaluate a
-saved index, add `--index <dir>`; queries and judgments still come from `--dataset`.
+saved index, add `--index <dir>`; queries and judgments still come from `--dataset`, unless
+`--queries` (BEIR JSONL, or `id<TAB>text` when the file ends in `.tsv`) and `--qrels` (BEIR TSV with
+a header, or TREC `qid iteration docid grade`) point elsewhere.
+
+MS MARCO passage ranking (8.8M passages, about 1 GB to download and 3 GB unpacked):
+
+```sh
+scripts/download.sh msmarco
+go build -o bin/ ./cmd/...
+./bin/quarry-index --corpus data/msmarco/collection.tsv --out data/indexes/msmarco
+./bin/quarry-eval --index data/indexes/msmarco --queries data/msmarco/queries.dev.small.tsv \
+  --qrels data/msmarco/qrels.dev.small.tsv --run runs/msmarco-dev.trec
+```
 
 Output is tab-separated, with metrics printed to four decimal places:
 
@@ -87,6 +102,19 @@ Baselines are Anserini's published
 | NFCorpus | R@100   | 0.2456 | 0.2457   |
 | NFCorpus | R@1000  | 0.3702 | 0.3704   |
 
+MS MARCO passage ranking, dev small queries (6,980), BM25 (k1=0.9, b=0.4), 1000 results per query.
+The baseline is Anserini's
+[msmarco-v1-passage regression](https://github.com/castorini/anserini/blob/master/src/main/resources/reproduce/from-document-collection/configs/msmarco-v1-passage.yaml)
+with default parameters. MRR@10 is `trec_eval -c -M 10 -m recip_rank`, which our metrics match exactly.
+
+| Dataset  | Metric  | quarry | Anserini |
+|----------|---------|-------:|---------:|
+| MS MARCO | MRR@10  | 0.1843 | 0.1840   |
+| MS MARCO | R@100   | 0.6590 | 0.6578   |
+| MS MARCO | R@1000  | 0.8526 | 0.8526   |
+
+The index holds 352,316,036 tokens in total, exactly the count Anserini reports for its index.
+
 Text is analyzed like Anserini's English analyzer (Lucene tokenization, possessive removal,
 lowercasing, stopwords, Porter stemming), verified token by token against real Lucene. The
 remaining nDCG@10 gap most likely comes from Lucene's rounded document lengths. See
@@ -99,6 +127,22 @@ To check it yourself, build trec_eval and run:
 tail -n +2 data/beir/scifact/qrels/test.tsv | awk -F'\t' '{print $1" 0 "$2" "$3}' > runs/scifact.qrels
 trec_eval -c -m ndcg_cut.10 runs/scifact.qrels runs/scifact.trec
 ```
+
+### MS MARCO index
+
+Full MS MARCO passage corpus, built with the commands in [Evaluation](#evaluation) (default 1 GB
+budget, 8 workers) on an Apple M3 (4 performance and 4 efficiency cores, 16 GB RAM, macOS):
+
+| Measure | Value |
+|---------|------:|
+| Documents | 8,841,823 |
+| Distinct terms | 2,660,824 |
+| Postings | 266,247,718 |
+| Build time | 75 s (about 118,000 documents per second) |
+| Index size | 885 MB (postings file 629 MB) |
+| Bits per posting | 18.91 (document ID gap and term frequency, both varints) |
+| Peak memory (RSS) | 2.7 GB, above the 1 GB budget (see the budget note above) |
+| Evaluation, 6,980 queries | 193 s with exhaustive search (about 28 ms per query) |
 
 ### Indexing speed
 
