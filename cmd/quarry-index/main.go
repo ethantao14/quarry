@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"runtime"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -31,7 +32,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	flags.SetOutput(stderr)
 	corpusPath := flags.String("corpus", "", "path to a BEIR JSONL corpus, or .tsv (id<TAB>text)")
 	out := flags.String("out", "", "path to a new index directory")
-	memBudget := flags.String("mem-budget", "1GB", "chunk memory budget in bytes, KB, MB, or GB")
+	memBudget := flags.String("mem-budget", "1GB", "memory budget for the whole build in bytes, KB, MB, or GB (limits the Go heap from 256MB)")
 	workers := flags.Int("workers", runtime.GOMAXPROCS(0), "number of goroutines that analyze documents")
 	err := flags.Parse(args)
 	if errors.Is(err, flag.ErrHelp) {
@@ -53,8 +54,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	applyMemoryLimit(budget)
 	start := time.Now()
-	segments, err := build(*corpusPath, *out, budget, *workers)
+	segments, err := build(*corpusPath, *out, chunkBudget(budget), *workers)
 	elapsed := time.Since(start)
 	if err != nil {
 		return err
@@ -113,6 +115,31 @@ func build(corpusPath, out string, budget int64, workers int) (int, error) {
 		return 0, err
 	}
 	return builder.Segments(), nil
+}
+
+// limitedBudgetMin is the smallest budget that also limits the Go heap; smaller budgets
+// only size chunks (tests use tiny budgets to force many segments).
+const limitedBudgetMin = 256 << 20
+
+// chunkBudget gives the in-memory chunk a third of the budget, leaving room for garbage
+// collection headroom, the analysis pipeline, and segment writes.
+func chunkBudget(budget int64) int64 {
+	chunk := budget / 3
+	if chunk < 1 {
+		return 1
+	}
+	return chunk
+}
+
+// applyMemoryLimit sets Go's soft memory limit to budget when budget >= limitedBudgetMin,
+// unless a lower limit (for example from GOMEMLIMIT) is already set. It returns the limit in effect.
+func applyMemoryLimit(budget int64) int64 {
+	current := debug.SetMemoryLimit(-1)
+	if budget >= limitedBudgetMin && budget < current {
+		debug.SetMemoryLimit(budget)
+		return budget
+	}
+	return current
 }
 
 func parseSize(s string) (int64, error) {

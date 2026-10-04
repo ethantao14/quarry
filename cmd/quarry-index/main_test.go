@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"slices"
 	"strconv"
 	"strings"
@@ -16,6 +17,13 @@ import (
 
 // tempOut in test arguments is replaced with a fresh temporary output path.
 const tempOut = "<temp out>"
+
+func TestMain(m *testing.M) {
+	old := debug.SetMemoryLimit(-1)
+	code := m.Run()
+	debug.SetMemoryLimit(old)
+	os.Exit(code)
+}
 
 func TestRunFlags(t *testing.T) {
 	tests := []struct {
@@ -154,6 +162,53 @@ func TestRunWritesIndex(t *testing.T) {
 		size, stats.seconds, stats.docsPerSecond, 8*float64(postInfo.Size())/8)
 	if got := stdout.String(); got != wantStdout {
 		t.Errorf("stdout = %q, want %q", got, wantStdout)
+	}
+}
+
+func TestChunkBudget(t *testing.T) {
+	tests := []struct {
+		budget int64
+		want   int64
+	}{
+		{budget: 1, want: 1},
+		{budget: 2, want: 1},
+		{budget: 3, want: 1},
+		{budget: 300, want: 100},
+		{budget: 1 << 30, want: (1 << 30) / 3},
+	}
+	for _, tt := range tests {
+		t.Run(fmt.Sprint(tt.budget), func(t *testing.T) {
+			if got := chunkBudget(tt.budget); got != tt.want {
+				t.Errorf("chunkBudget(%d) = %d, want %d", tt.budget, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestApplyMemoryLimit(t *testing.T) {
+	old := debug.SetMemoryLimit(-1)
+	t.Cleanup(func() { debug.SetMemoryLimit(old) })
+	tests := []struct {
+		name   string
+		start  int64
+		budget int64
+		want   int64
+	}{
+		{name: "below minimum", start: math.MaxInt64, budget: 1 << 20, want: math.MaxInt64},
+		{name: "minimum", start: math.MaxInt64, budget: limitedBudgetMin, want: limitedBudgetMin},
+		{name: "larger budget", start: math.MaxInt64, budget: 1 << 30, want: 1 << 30},
+		{name: "lower existing limit", start: 512 << 20, budget: 1 << 30, want: 512 << 20},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			debug.SetMemoryLimit(tt.start)
+			if got := applyMemoryLimit(tt.budget); got != tt.want {
+				t.Errorf("applyMemoryLimit(%d) = %d, want %d", tt.budget, got, tt.want)
+			}
+			if got := debug.SetMemoryLimit(-1); got != tt.want {
+				t.Errorf("memory limit = %d, want %d", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -387,5 +442,41 @@ func TestRunEmptyCorpusStats(t *testing.T) {
 	stats := parseBuildStats(t, stdout.String())
 	if stats.docs != 0 || stats.terms != 0 || stats.postings != 0 || stats.docsPerSecond != 0 || stats.bitsPerPosting != 0 {
 		t.Fatalf("unexpected empty corpus stats: %q", stdout.String())
+	}
+}
+
+// TestRunUsesBudget checks that run limits the Go heap and gives chunks a third of the budget.
+func TestRunUsesBudget(t *testing.T) {
+	old := debug.SetMemoryLimit(math.MaxInt64)
+	t.Cleanup(func() { debug.SetMemoryLimit(old) })
+	path := filepath.Join(t.TempDir(), "corpus.tsv")
+	var input strings.Builder
+	for i := range 80 {
+		fmt.Fprintf(&input, "doc-%d\tRed fish blue fish\n", i)
+	}
+	if err := os.WriteFile(path, []byte(input.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The corpus is estimated at about 6 KB: a 12 KB chunk would hold it all, a 4 KB chunk cannot.
+	for _, tt := range []struct {
+		budget    string
+		wantLimit int64
+	}{
+		{budget: "12KB", wantLimit: math.MaxInt64},
+		{budget: "512MB", wantLimit: 512 << 20},
+	} {
+		t.Run(tt.budget, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			args := []string{"--corpus", path, "--out", filepath.Join(t.TempDir(), "idx"), "--mem-budget", tt.budget}
+			if err := run(args, &stdout, &stderr); err != nil {
+				t.Fatal(err)
+			}
+			if got := debug.SetMemoryLimit(-1); got != tt.wantLimit {
+				t.Errorf("memory limit = %d, want %d", got, tt.wantLimit)
+			}
+			if stats := parseBuildStats(t, stdout.String()); tt.budget == "12KB" && stats.segments == 0 {
+				t.Errorf("segments = 0, want a flush with a third of a 12 KB budget")
+			}
+		})
 	}
 }

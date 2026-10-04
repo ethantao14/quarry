@@ -7,29 +7,30 @@ import (
 	"path/filepath"
 )
 
-// Builder indexes documents in memory-budgeted chunks and merges them on Finish.
-// The budget estimates chunk memory; a single document and merging can exceed it.
+// Builder indexes documents in chunks and merges them on Finish. The chunk budget
+// bounds an estimate of the in-memory chunk; a single document and merging can exceed it.
 type Builder struct {
-	dir       string
-	memBudget int64
-	memory    int64
-	chunk     *Index
-	docCount  uint32
-	segments  []uint32
-	finished  bool
-	failure   error
+	dir         string
+	chunkBudget int64
+	memory      int64
+	chunk       *Index
+	docCount    uint32
+	segments    []uint32
+	finished    bool
+	failure     error
 }
 
-// NewBuilder creates a new index directory with a positive memory budget in bytes.
-func NewBuilder(dir string, memBudget int64) (*Builder, error) {
-	if memBudget <= 0 {
-		return nil, fmt.Errorf("memory budget must be positive")
+// NewBuilder creates a new index directory with a positive in-memory chunk budget in bytes.
+// Callers decide how the chunk budget relates to process memory.
+func NewBuilder(dir string, chunkBudget int64) (*Builder, error) {
+	if chunkBudget <= 0 {
+		return nil, fmt.Errorf("chunk budget must be positive")
 	}
 	dir, err := createIndexDir(dir)
 	if err != nil {
 		return nil, err
 	}
-	return &Builder{dir: dir, memBudget: memBudget, chunk: New()}, nil
+	return &Builder{dir: dir, chunkBudget: chunkBudget, chunk: New()}, nil
 }
 
 // Add indexes a document in input order, flushing the chunk when it reaches the budget.
@@ -46,26 +47,35 @@ func (b *Builder) Add(externalID string, terms []string) error {
 	b.memory += b.estimateDocument(externalID, terms)
 	b.chunk.Add(externalID, terms)
 	b.docCount++
-	if b.memory >= b.memBudget {
+	if b.memory >= b.chunkBudget {
 		b.failure = b.flush()
 		return b.failure
 	}
 	return nil
 }
 
-// estimateDocument counts 64 bytes of map/string/slice overhead per new term,
-// 8 bytes per posting, and 4 bytes of length plus a 16-byte ID header per document.
+const (
+	// docOverhead covers doc length, ID string header, and slice growth.
+	docOverhead = 40
+	// postingSize covers an 8-byte posting plus slice growth slack.
+	postingSize = 10
+	// newTermOverhead covers a map entry plus string and slice headers.
+	newTermOverhead = 96
+)
+
+// estimateDocument uses constants measured against the live heap on SciFact
+// and MS MARCO chunks.
 func (b *Builder) estimateDocument(externalID string, terms []string) int64 {
-	size := int64(4+16) + int64(len(externalID))
+	size := int64(docOverhead) + int64(len(externalID))
 	seen := make(map[string]bool)
 	for _, term := range terms {
 		if seen[term] {
 			continue
 		}
 		seen[term] = true
-		size += 8
+		size += postingSize
 		if _, exists := b.chunk.postings[term]; !exists {
-			size += int64(len(term)) + 64
+			size += int64(len(term)) + newTermOverhead
 		}
 	}
 	return size

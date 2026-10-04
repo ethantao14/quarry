@@ -39,12 +39,15 @@ temporary segments, total index size in bytes, build time in seconds, documents 
 bits per posting (postings file size divided by postings). It refuses to overwrite an existing directory, and removes its partial
 output if indexing fails.
 
-To index a corpus larger than memory, cap the memory used for collecting postings with
-`--mem-budget` (bytes, or a number with `KB`, `MB`, or `GB`; default `1GB`). When the budget is
-reached, quarry writes what it has as a temporary segment and continues; at the end it merges the
-segments into one index. The result is byte-for-byte the same for any budget. The budget is an
-estimate of postings memory, not a hard limit on the whole process (see
-[docs/DESIGN.md](docs/DESIGN.md#indexing-within-a-memory-budget)).
+To index a corpus larger than memory, set `--mem-budget` (bytes, or a number with `KB`, `MB`, or
+`GB`; default `1GB`). Postings are collected in memory until they reach a third of the budget; then
+quarry writes them as a temporary segment and continues, and at the end it merges the segments into
+one index. The result is byte-for-byte the same for any budget. From 256 MB up, the budget is also
+Go's soft memory limit, so the whole build stays within it: on MS MARCO, peak memory was 79% of a
+1 GB budget and 88% of a 512 MB budget. At 256 MB it went 16% over, because the final merge needs
+about 100 MB for MS MARCO's term dictionary whatever the budget (see
+[docs/DESIGN.md](docs/DESIGN.md#indexing-within-a-memory-budget)). Smaller budgets only size the
+chunks.
 
 Text analysis runs on `--workers` goroutines (default: the number of CPUs Go uses). The index is
 byte-for-byte the same for any worker count. Use exactly one of `--corpus` or `--index` when
@@ -138,11 +141,24 @@ budget, 8 workers) on an Apple M3 (4 performance and 4 efficiency cores, 16 GB R
 | Documents | 8,841,823 |
 | Distinct terms | 2,660,824 |
 | Postings | 266,247,718 |
-| Build time | 75 s (about 118,000 documents per second) |
+| Build time | 83 s (about 106,000 documents per second, 11 temporary segments) |
 | Index size | 885 MB (postings file 629 MB) |
 | Bits per posting | 18.91 (document ID gap and term frequency, both varints) |
-| Peak memory (RSS) | 2.7 GB, above the 1 GB budget (see the budget note above) |
+| Peak memory | 0.79 GB footprint (1.5 GB resident, see below) within the 1 GB budget |
 | Evaluation, 6,980 queries | 193 s with exhaustive search (about 28 ms per query) |
+
+Memory is the peak physical footprint reported by `/usr/bin/time -l` on macOS, the figure Activity
+Monitor shows. macOS keeps counting memory that Go has already returned in the resident set size
+until it needs the pages back, so RSS overstates use there.
+
+Peak footprint by budget on MS MARCO (same machine; the index is byte-identical in every case):
+
+| `--mem-budget` | Before budget-aware builds | Now | Build time now | Segments now |
+|---------------:|---------------------------:|----:|---------------:|-------------:|
+| 256 MB | 0.75 GB | 0.29 GB | 88 s | 44 |
+| 512 MB | 1.52 GB | 0.44 GB | 90 s | 21 |
+| 1 GB   | 2.79 GB | 0.79 GB | 83 s | 11 |
+| 2 GB   | 5.70 GB | 1.43 GB | 83 s | 5 |
 
 ### Indexing speed
 
