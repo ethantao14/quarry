@@ -1,4 +1,4 @@
-package query
+package query_test
 
 import (
 	"math"
@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/ethantao14/quarry/internal/index"
+	"github.com/ethantao14/quarry/internal/query"
 	"github.com/ethantao14/quarry/internal/scoring"
 )
 
@@ -17,11 +18,11 @@ func TestExhaustiveGolden(t *testing.T) {
 	ix.Add("d1", strings.Fields("the lazy dog"))
 	ix.Add("d2", strings.Fields("quick quick dog"))
 
-	got, err := Exhaustive(ix, scoring.DefaultBM25(), []string{"quick", "dog"}, 10)
+	got, err := query.Exhaustive(ix, scoring.DefaultBM25(), []string{"quick", "dog"}, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []Result{
+	want := []query.Result{
 		{DocID: 2, Score: 0.5803626947},
 		{DocID: 1, Score: 0.2521478698},
 		{DocID: 0, Score: 0.2383385544},

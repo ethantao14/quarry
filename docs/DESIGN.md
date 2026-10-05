@@ -81,19 +81,23 @@ differently.
 
 ## On-disk index format
 
-`quarry-index` saves an index as a directory of five files (format version 1). All integers are
+`quarry-index` saves an index as a directory of six files (format version 2). An index from another
+version fails to open with a message to rebuild it. All integers are
 little-endian. Each binary file starts with an 8-byte header, a 4-byte magic string and the format
 version, so a file from another format or version is rejected with a clear error.
 
 ```text
-manifest.json   format_version, doc_count, total_terms, term_count,
+manifest.json   format_version, doc_count, total_terms, term_count, bm25_k1, bm25_b,
                 and for each binary file: its size and CRC32C checksum (written last)
-seg0.dict       "QDCT" v1 | termCount u32 | termCount x 24-byte entries | term bytes
-                entry: termOffset u32, termLen u32, docFreq u32, postingsOffset u64, postingsLen u32
-seg0.post       "QPST" v1 | each term's postings, in dictionary order
+seg0.dict       "QDCT" v2 | termCount u32 | termCount x 36-byte entries | term bytes
+                entry: termOffset u32, termLen u32, docFreq u32, postingsOffset u64, postingsLen u32,
+                       skipOffset u64, maxScore f32
+seg0.post       "QPST" v2 | each term's postings, in dictionary order
                 posting: uvarint(docID gap), uvarint(tf); the first gap is the doc ID itself
-seg0.lens       "QLEN" v1 | docCount u32 | docCount x u32 document lengths
-seg0.ids        "QIDS" v1 | docCount u32 | (docCount + 1) x u64 offsets | external ID bytes
+seg0.skip       "QSKP" v2 | for each term, one 12-byte entry per block of 128 postings
+                entry: lastDocID u32, offset u32 (from the term's first posting), blockMax f32
+seg0.lens       "QLEN" v2 | docCount u32 | docCount x u32 document lengths
+seg0.ids        "QIDS" v2 | docCount u32 | (docCount + 1) x u64 offsets | external ID bytes
 ```
 
 Choices and tradeoffs:
@@ -102,8 +106,18 @@ Choices and tradeoffs:
   rows, with no parsing and no in-memory map to build at startup. Terms live in a separate blob so
   rows stay fixed-width. Front-coded blocks or an FST would be smaller, but are more complex.
 - **Delta + varint postings.** Doc IDs are stored as gaps from the previous doc ID. Gaps are small for
-  common terms, so most take one byte. A later codec will use blocks of 128 postings with skip data
-  for fast `advance(target)`, which pruning (WAND, Block-Max WAND) needs.
+  common terms, so most take one byte.
+- **Blocks of 128 with skip entries.** A term's postings are one gap-encoded stream, cut into blocks of
+  128. Each block's skip entry holds its last doc ID and where it starts, so decoding a block needs only
+  the previous block's last doc ID, and `Advance(target)` binary-searches the skip entries and decodes
+  one block instead of the whole list. Because blocks are pieces of the same stream, the postings file
+  is byte-for-byte what format 1 wrote; only the skip file and wider dictionary rows are new. Bit-packed
+  blocks (as in Lucene) would be smaller and faster to decode, but are a separate codec.
+- **Score bounds for pruning.** Each skip entry stores the block's highest BM25 contribution, and each
+  dictionary row the term's highest. They are computed with the final index's document count, average
+  length, and document lengths, exactly as a query computes scores, then rounded up to float32, so a
+  bound is never below a real score. The manifest records k1 and b, since the bounds are only valid for
+  those parameters. WAND uses the term bounds and Block-Max WAND the block bounds.
 - **Strict decoding.** The decoder returns an error, never panics, on truncated input, values over
   32 bits, a zero gap after the first posting, a zero term frequency, a non-minimal varint, or
   leftover bytes. It is fuzz tested.

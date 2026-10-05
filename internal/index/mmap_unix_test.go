@@ -35,8 +35,8 @@ func TestMappingsReleased(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := liveMappings.Load() - before; got != 4 {
-		t.Errorf("after Open, %d new mappings, want 4", got)
+	if got := liveMappings.Load() - before; got != 5 {
+		t.Errorf("after Open, %d new mappings, want 5", got)
 	}
 	if err := disk.Close(); err != nil {
 		t.Fatal(err)

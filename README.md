@@ -52,8 +52,10 @@ chunks.
 Text analysis runs on `--workers` goroutines (default: the number of CPUs Go uses). The index is
 byte-for-byte the same for any worker count. Use exactly one of `--corpus` or `--index` when
 searching. Results from a saved index are identical to searching the corpus directly. Saved indexes
-are memory-mapped, which works on macOS and Linux. The format is
-described in [docs/DESIGN.md](docs/DESIGN.md#on-disk-index-format).
+are memory-mapped, which works on macOS and Linux. The format (version 2: postings in blocks of 128
+with skip entries and BM25 score bounds) is described in
+[docs/DESIGN.md](docs/DESIGN.md#on-disk-index-format). An index saved by an older build reports its
+format version and must be rebuilt with `quarry-index`.
 
 ## Evaluation
 
