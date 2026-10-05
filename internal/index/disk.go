@@ -8,18 +8,22 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
 
 	"github.com/ethantao14/quarry/internal/postings"
+	"github.com/ethantao14/quarry/internal/scoring"
 )
 
 // Disk reads an immutable index from memory-mapped binary files.
-// Its methods return owned data: Postings decodes into new memory and ExternalID copies into a string.
+// Cursors borrow its mappings and must not be used after Close.
 type Disk struct {
 	dict         []byte
 	post         []byte
+	skip         []byte
+	bm25         scoring.BM25
 	lens         []byte
 	ids          []byte
 	docCount     uint32
@@ -28,8 +32,8 @@ type Disk struct {
 	postingCount uint64
 }
 
-// Open memory-maps and validates an index directory without decoding its tables.
-// Data returned by Disk methods does not point into the mappings. Call Close when done.
+// Open memory-maps and validates an index directory without decoding postings.
+// Call Close after all reads and cursors are finished.
 func Open(dir string) (*Disk, error) {
 	// Resolve through the OS first; filepath.Join resolves ".." by text otherwise.
 	dir, err := filepath.EvalSymlinks(dir)
@@ -54,12 +58,15 @@ func Open(dir string) (*Disk, error) {
 		return nil, fmt.Errorf("%s: trailing JSON value", manifestName)
 	}
 	if m.FormatVersion != FormatVersion {
-		return nil, formatError(manifestName, m.FormatVersion)
+		return nil, formatError(m.FormatVersion)
 	}
-	if len(m.Files) != 4 {
-		return nil, fmt.Errorf("%s: expected exactly four binary files", manifestName)
+	if len(m.Files) != 5 {
+		return nil, fmt.Errorf("%s: expected exactly five binary files", manifestName)
 	}
-	d := &Disk{docCount: m.DocCount, termCount: m.TermCount, totalTerms: m.TotalTerms}
+	if m.BM25K1 == nil || m.BM25B == nil || !finite(*m.BM25K1) || !finite(*m.BM25B) {
+		return nil, fmt.Errorf("%s: bm25_k1 and bm25_b must be present and finite", manifestName)
+	}
+	d := &Disk{bm25: scoring.BM25{K1: *m.BM25K1, B: *m.BM25B}, docCount: m.DocCount, termCount: m.TermCount, totalTerms: m.TotalTerms}
 	opened := false
 	defer func() {
 		if !opened {
@@ -74,6 +81,7 @@ func Open(dir string) (*Disk, error) {
 	}{
 		{dictName, dictMagic, &d.dict},
 		{postName, postMagic, &d.post},
+		{skipName, skipMagic, &d.skip},
 		{lensName, lensMagic, &d.lens},
 		{idsName, idsMagic, &d.ids},
 	}
@@ -100,10 +108,13 @@ func Open(dir string) (*Disk, error) {
 			return nil, fmt.Errorf("%s: bad magic", file.name)
 		}
 		if version := binary.LittleEndian.Uint32(data[4:8]); version != FormatVersion {
-			return nil, formatError(file.name, version)
+			return nil, formatError(version)
 		}
 	}
 	if err := d.validateDict(); err != nil {
+		return nil, err
+	}
+	if err := d.validateSkip(); err != nil {
 		return nil, err
 	}
 	if err := d.validateLens(); err != nil {
@@ -120,7 +131,7 @@ func Open(dir string) (*Disk, error) {
 // Calling Close again returns nil.
 func (d *Disk) Close() error {
 	var firstErr error
-	for _, data := range []*[]byte{&d.dict, &d.post, &d.lens, &d.ids} {
+	for _, data := range []*[]byte{&d.dict, &d.post, &d.skip, &d.lens, &d.ids} {
 		if err := unmapFile(*data); err != nil && firstErr == nil {
 			firstErr = err
 		}
@@ -129,8 +140,55 @@ func (d *Disk) Close() error {
 	return firstErr
 }
 
-func formatError(name string, version uint32) error {
-	return fmt.Errorf("%s: index is format %d, this build reads format %d", name, version, FormatVersion)
+func formatError(version uint32) error {
+	return fmt.Errorf("index is format %d, this build reads format %d; rebuild it with quarry-index", version, FormatVersion)
+}
+
+func finite(x float64) bool {
+	return !math.IsNaN(x) && !math.IsInf(x, 0)
+}
+
+// BM25 returns the parameters used to compute the stored score bounds.
+func (d *Disk) BM25() scoring.BM25 { return d.bm25 }
+
+func (d *Disk) validateSkip() error {
+	position := uint64(headerSize)
+	for i := uint32(0); i < d.termCount; i++ {
+		entry := d.entry(i)
+		count := (uint64(entry.docFreq) + postings.BlockSize - 1) / postings.BlockSize
+		size := count * skipEntrySize
+		if entry.skipOffset != position {
+			return fmt.Errorf("%s: term %q: noncontiguous skip offset", skipName, d.term(entry))
+		}
+		if size > uint64(len(d.skip))-position {
+			return fmt.Errorf("%s: invalid skip table size", skipName)
+		}
+		var previous skipEntry
+		var maximum float32
+		for block := uint64(0); block < count; block++ {
+			start := position + block*skipEntrySize
+			skip := parseSkipEntry(d.skip[start : start+skipEntrySize])
+			if (block == 0 && skip.offset != 0) || (block > 0 && skip.offset <= previous.offset) || skip.offset >= entry.postingsLen {
+				return fmt.Errorf("%s: term %q: invalid block offset", skipName, d.term(entry))
+			}
+			if skip.lastDocID >= d.docCount || (block > 0 && skip.lastDocID <= previous.lastDocID) {
+				return fmt.Errorf("%s: term %q: invalid last doc ID", skipName, d.term(entry))
+			}
+			if !finite(float64(skip.blockMax)) || skip.blockMax < 0 {
+				return fmt.Errorf("%s: term %q: invalid block maximum", skipName, d.term(entry))
+			}
+			maximum = max(maximum, skip.blockMax)
+			previous = skip
+		}
+		if entry.maxScore != maximum {
+			return fmt.Errorf("%s: term %q: maximum score mismatch", dictName, d.term(entry))
+		}
+		position += size
+	}
+	if position != uint64(len(d.skip)) {
+		return fmt.Errorf("%s: invalid skip table size", skipName)
+	}
+	return nil
 }
 
 // readCount returns the uint32 count stored right after a file's header.

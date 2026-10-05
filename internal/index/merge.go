@@ -61,6 +61,7 @@ func mergeSegments(dir string, dirs []string, counts []uint32) (err error) {
 	}()
 	bases := make([]uint32, len(dirs))
 	var docCount uint32
+	var totalTerms uint64
 	for i, path := range dirs {
 		disk, err := Open(path)
 		if err != nil {
@@ -69,8 +70,20 @@ func mergeSegments(dir string, dirs []string, counts []uint32) (err error) {
 		disks = append(disks, disk)
 		bases[i] = docCount
 		docCount += counts[i]
+		totalTerms += disk.totalTerms
 	}
-	writer, err := newSegmentWriter(dir, durable)
+	segmentFor := func(docID uint32) int {
+		return sort.Search(len(bases), func(i int) bool { return bases[i] > docID }) - 1
+	}
+	docLen := func(docID uint32) uint32 {
+		i := segmentFor(docID)
+		return disks[i].DocLen(docID - bases[i])
+	}
+	var avgDocLen float64
+	if docCount > 0 {
+		avgDocLen = float64(totalTerms) / float64(docCount)
+	}
+	writer, err := newSegmentWriter(dir, durable, scoringStats{docCount, avgDocLen, docLen})
 	if err != nil {
 		return err
 	}
@@ -105,13 +118,7 @@ func mergeSegments(dir string, dirs []string, counts []uint32) (err error) {
 			return err
 		}
 	}
-	segmentFor := func(docID uint32) int {
-		return sort.Search(len(bases), func(i int) bool { return bases[i] > docID }) - 1
-	}
-	return writer.finish(docCount, func(docID uint32) uint32 {
-		i := segmentFor(docID)
-		return disks[i].DocLen(docID - bases[i])
-	}, func(docID uint32) string {
+	return writer.finish(docCount, docLen, func(docID uint32) string {
 		i := segmentFor(docID)
 		return disks[i].ExternalID(docID - bases[i])
 	})

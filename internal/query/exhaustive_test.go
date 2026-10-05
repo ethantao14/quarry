@@ -1,4 +1,4 @@
-package query
+package query_test
 
 import (
 	"fmt"
@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/ethantao14/quarry/internal/index"
+	"github.com/ethantao14/quarry/internal/query"
 	"github.com/ethantao14/quarry/internal/scoring"
 )
 
@@ -35,7 +36,7 @@ func TestExhaustive(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			results, err := Exhaustive(ix, scoring.DefaultBM25(), tt.terms, tt.k)
+			results, err := query.Exhaustive(ix, scoring.DefaultBM25(), tt.terms, tt.k)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -54,11 +55,11 @@ func TestExhaustiveRepeatedTerm(t *testing.T) {
 	ix := index.New()
 	ix.Add("a", []string{"red", "red", "blue"})
 	ix.Add("b", []string{"red"})
-	single, err := Exhaustive(ix, scoring.DefaultBM25(), []string{"red"}, 10)
+	single, err := query.Exhaustive(ix, scoring.DefaultBM25(), []string{"red"}, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
-	repeated, err := Exhaustive(ix, scoring.DefaultBM25(), []string{"red", "red"}, 10)
+	repeated, err := query.Exhaustive(ix, scoring.DefaultBM25(), []string{"red", "red"}, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +67,7 @@ func TestExhaustiveRepeatedTerm(t *testing.T) {
 		t.Fatalf("Exhaustive() lengths = %d, %d, want 2, 2", len(repeated), len(single))
 	}
 	for i, result := range repeated {
-		want := Result{DocID: single[i].DocID, Score: 2 * single[i].Score}
+		want := query.Result{DocID: single[i].DocID, Score: 2 * single[i].Score}
 		if result != want {
 			t.Errorf("Exhaustive(repeated)[%d] = %v, want %v", i, result, want)
 		}
@@ -93,7 +94,7 @@ func TestExhaustiveBruteForce(t *testing.T) {
 			terms[i] = queryVocabulary[random.IntN(len(queryVocabulary))]
 		}
 		for _, k := range []int{-1, 0, 1, 3, 10, 25} {
-			got, err := Exhaustive(ix, bm25, terms, k)
+			got, err := query.Exhaustive(ix, bm25, terms, k)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -108,7 +109,7 @@ func TestExhaustiveBruteForce(t *testing.T) {
 			}
 			reversed := slices.Clone(terms)
 			slices.Reverse(reversed)
-			reordered, err := Exhaustive(ix, bm25, reversed, k)
+			reordered, err := query.Exhaustive(ix, bm25, reversed, k)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -119,7 +120,7 @@ func TestExhaustiveBruteForce(t *testing.T) {
 	}
 }
 
-func bruteForce(docs [][]string, bm25 scoring.BM25, terms []string, k int) []Result {
+func bruteForce(docs [][]string, bm25 scoring.BM25, terms []string, k int) []query.Result {
 	if k <= 0 {
 		return nil
 	}
@@ -128,7 +129,7 @@ func bruteForce(docs [][]string, bm25 scoring.BM25, terms []string, k int) []Res
 		totalLen += len(doc)
 	}
 	avgDocLen := float64(totalLen) / float64(len(docs))
-	var results []Result
+	var results []query.Result
 	for docID, doc := range docs {
 		var score float64
 		matched := false
@@ -152,7 +153,7 @@ func bruteForce(docs [][]string, bm25 scoring.BM25, terms []string, k int) []Res
 			score += bm25.TermScore(scoring.IDF(len(docs), docFreq), tf, uint32(len(doc)), avgDocLen)
 		}
 		if matched {
-			results = append(results, Result{DocID: uint32(docID), Score: score})
+			results = append(results, query.Result{DocID: uint32(docID), Score: score})
 		}
 	}
 	sort.Slice(results, func(i, j int) bool {

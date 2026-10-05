@@ -149,7 +149,7 @@ func TestOpenFileCorruption(t *testing.T) {
 	if err := smallIndex().Write(source); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{dictName, postName, lensName, idsName} {
+	for _, name := range []string{dictName, postName, skipName, lensName, idsName} {
 		t.Run(name, func(t *testing.T) {
 			tests := []struct {
 				name        string
@@ -162,7 +162,7 @@ func TestOpenFileCorruption(t *testing.T) {
 				{"empty", func(b []byte) []byte { return b[:0] }, false, "size mismatch"},
 				{"short header", func(b []byte) []byte { return b[:7] }, true, "truncated header"},
 				{"bad magic", func(b []byte) []byte { b[0] = '!'; return b }, true, "bad magic"},
-				{"bad version", func(b []byte) []byte { binary.LittleEndian.PutUint32(b[4:8], 2); return b }, true, "index is format 2, this build reads format 1"},
+				{"bad version", func(b []byte) []byte { binary.LittleEndian.PutUint32(b[4:8], 1); return b }, true, "index is format 1, this build reads format 2; rebuild it with quarry-index"},
 				{"delete", nil, false, name},
 			}
 			for _, tt := range tests {
@@ -184,7 +184,7 @@ func TestOpenFileCorruption(t *testing.T) {
 					if err == nil {
 						cleanupDisk(t, disk)
 					}
-					if err == nil || !strings.Contains(err.Error(), tt.want) || !strings.Contains(err.Error(), name) {
+					if err == nil || !strings.Contains(err.Error(), tt.want) || (tt.name != "bad version" && !strings.Contains(err.Error(), name)) {
 						t.Fatalf("Open() error = %v, want %q and %q", err, tt.want, name)
 					}
 					if tt.change == nil && !errors.Is(err, fs.ErrNotExist) {
@@ -211,7 +211,7 @@ func TestOpenManifestCorruption(t *testing.T) {
 				t.Fatal(err)
 			}
 		}, "manifest"},
-		{"version", func(t *testing.T, dir string) { rewriteManifest(t, dir, func(m *manifest) { m.FormatVersion = 2 }) }, "index is format 2, this build reads format 1"},
+		{"version", func(t *testing.T, dir string) { rewriteManifest(t, dir, func(m *manifest) { m.FormatVersion = 1 }) }, "index is format 1, this build reads format 2; rebuild it with quarry-index"},
 		{"unknown field", func(t *testing.T, dir string) {
 			data := readTestFile(t, dir, manifestName)
 			data = append([]byte(`{"unknown":1,`), data[1:]...)
@@ -262,8 +262,8 @@ func TestOpenTableCorruption(t *testing.T) {
 		{"short dict entries", dictName, func(b []byte) []byte { return b[:13] }, "entries table", false},
 		{"term offset", dictName, func(b []byte) []byte { binary.LittleEndian.PutUint32(b[12:16], math.MaxUint32); return b }, "term range", false},
 		{"term length", dictName, func(b []byte) []byte { binary.LittleEndian.PutUint32(b[16:20], math.MaxUint32); return b }, "term range", false},
-		{"unsorted terms", dictName, func(b []byte) []byte { b[12+3*24] = 'z'; return b }, "strictly ascending", false},
-		{"duplicate terms", dictName, func(b []byte) []byte { b[12+3*24+1] = 'a'; return b }, "strictly ascending", false},
+		{"unsorted terms", dictName, func(b []byte) []byte { b[12+3*dictEntrySize] = 'z'; return b }, "strictly ascending", false},
+		{"duplicate terms", dictName, func(b []byte) []byte { b[12+3*dictEntrySize+1] = 'a'; return b }, "strictly ascending", false},
 		{"post offset overflow", dictName, func(b []byte) []byte { binary.LittleEndian.PutUint64(b[24:32], math.MaxUint64); return b }, "postings range", false},
 		{"post length", dictName, func(b []byte) []byte { binary.LittleEndian.PutUint32(b[32:36], math.MaxUint32); return b }, "postings range", false},
 		{"post inside header", dictName, func(b []byte) []byte { binary.LittleEndian.PutUint64(b[24:32], 7); return b }, "postings range", false},
@@ -322,7 +322,7 @@ func TestDiskClose(t *testing.T) {
 	if err := disk.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
-	if disk.dict != nil || disk.post != nil || disk.lens != nil || disk.ids != nil {
+	if disk.dict != nil || disk.post != nil || disk.skip != nil || disk.lens != nil || disk.ids != nil {
 		t.Error("Close() did not clear all mappings")
 	}
 	if err := disk.Close(); err != nil {

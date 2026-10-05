@@ -60,7 +60,7 @@ func TestSegmentWriterTermOrder(t *testing.T) {
 		{"empty duplicate", "", ""},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			writer, err := newSegmentWriter(t.TempDir(), temporary)
+			writer, err := newSegmentWriter(t.TempDir(), temporary, scoringStats{1, 1, func(uint32) uint32 { return 1 }})
 			if err != nil {
 				t.Fatal(err)
 			}

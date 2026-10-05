@@ -16,6 +16,7 @@ import (
 	"sort"
 
 	"github.com/ethantao14/quarry/internal/postings"
+	"github.com/ethantao14/quarry/internal/scoring"
 )
 
 // Write saves the index in a new directory, publishing its manifest last.
@@ -80,7 +81,7 @@ func splitLastElement(dir string) (parent, name string) {
 }
 
 func (ix *Index) writeSegment(dir string, sync bool) error {
-	writer, err := newSegmentWriter(dir, sync)
+	writer, err := newSegmentWriter(dir, sync, scoringStats{uint32(ix.DocCount()), ix.AvgDocLen(), ix.DocLen})
 	if err != nil {
 		return err
 	}
@@ -98,16 +99,24 @@ func (ix *Index) writeSegment(dir string, sync bool) error {
 	return writer.finish(uint32(ix.DocCount()), ix.DocLen, ix.ExternalID)
 }
 
+type scoringStats struct {
+	docCount  uint32
+	avgDocLen float64
+	docLen    func(uint32) uint32
+}
+
 type segmentWriter struct {
 	dir      string
 	sync     bool
 	post     *checkedFile
+	skip     *checkedFile
+	stats    scoringStats
 	entries  []dictEntry
 	termBlob []byte
 	previous string
 }
 
-func newSegmentWriter(dir string, sync bool) (*segmentWriter, error) {
+func newSegmentWriter(dir string, sync bool, stats scoringStats) (*segmentWriter, error) {
 	post, err := newCheckedFile(filepath.Join(dir, postName), sync)
 	if err != nil {
 		return nil, err
@@ -117,11 +126,23 @@ func newSegmentWriter(dir string, sync bool) (*segmentWriter, error) {
 		post.abort()
 		return nil, fmt.Errorf("write %s: %w", post.path, err)
 	}
-	return &segmentWriter{dir: dir, sync: sync, post: post}, nil
+	skip, err := newCheckedFile(filepath.Join(dir, skipName), sync)
+	if err != nil {
+		post.abort()
+		return nil, err
+	}
+	header = binary.LittleEndian.AppendUint32([]byte(skipMagic), FormatVersion)
+	if _, err := skip.Write(header); err != nil {
+		post.abort()
+		skip.abort()
+		return nil, fmt.Errorf("write %s: %w", skip.path, err)
+	}
+	return &segmentWriter{dir: dir, sync: sync, post: post, skip: skip, stats: stats}, nil
 }
 
 func (s *segmentWriter) abort() {
 	s.post.abort()
+	s.skip.abort()
 }
 
 func (s *segmentWriter) addTerm(term string, list []postings.Posting) error {
@@ -131,7 +152,21 @@ func (s *segmentWriter) addTerm(term string, list []postings.Posting) error {
 	if uint64(len(s.entries)) >= math.MaxUint32 {
 		return fmt.Errorf("index counts exceed format limits")
 	}
-	encoded := postings.Encode(nil, list)
+	// Encode block by block so each skip entry records where its block starts.
+	idf := scoring.IDF(int(s.stats.docCount), len(list))
+	var encoded []byte
+	var blocks []skipEntry
+	var previous uint32
+	for start := 0; start < len(list); start += postings.BlockSize {
+		block := list[start:min(start+postings.BlockSize, len(list))]
+		blocks = append(blocks, skipEntry{
+			lastDocID: block[len(block)-1].DocID,
+			offset:    uint32(len(encoded)),
+			blockMax:  s.blockMax(block, idf),
+		})
+		encoded = postings.EncodeBlock(encoded, block, previous)
+		previous = block[len(block)-1].DocID
+	}
 	if uint64(len(s.termBlob))+uint64(len(term)) > math.MaxUint32 || uint64(len(encoded)) > math.MaxUint32 || uint64(len(list)) > math.MaxUint32 {
 		err := fmt.Errorf("term %q exceeds format limits", term)
 		return fmt.Errorf("write %s: %w", filepath.Join(s.dir, dictName), err)
@@ -142,6 +177,13 @@ func (s *segmentWriter) addTerm(term string, list []postings.Posting) error {
 		docFreq:        uint32(len(list)),
 		postingsOffset: s.post.size,
 		postingsLen:    uint32(len(encoded)),
+		skipOffset:     s.skip.size,
+	}
+	for _, block := range blocks {
+		entry.maxScore = max(entry.maxScore, block.blockMax)
+		if _, err := s.skip.Write(block.appendTo(nil)); err != nil {
+			return fmt.Errorf("write %s: %w", s.skip.path, err)
+		}
 	}
 	if _, err := s.post.Write(encoded); err != nil {
 		return fmt.Errorf("write %s: %w", s.post.path, err)
@@ -152,17 +194,36 @@ func (s *segmentWriter) addTerm(term string, list []postings.Posting) error {
 	return nil
 }
 
+// blockMax is the block's highest BM25 contribution, rounded up so it is never below
+// a score computed at query time with the same statistics.
+func (s *segmentWriter) blockMax(block []postings.Posting, idf float64) float32 {
+	bm25 := scoring.DefaultBM25()
+	var maximum float64
+	for _, posting := range block {
+		score := bm25.TermScore(idf, posting.TF, s.stats.docLen(posting.DocID), s.stats.avgDocLen)
+		maximum = max(maximum, score)
+	}
+	return roundScoreUp(maximum)
+}
+
 func (s *segmentWriter) finish(docCount uint32, docLen func(uint32) uint32, externalID func(uint32) string) error {
 	defer s.abort()
 	info, err := s.post.finish()
 	if err != nil {
 		return err
 	}
+	skipInfo, err := s.skip.finish()
+	if err != nil {
+		return err
+	}
+	bm25 := scoring.DefaultBM25()
 	m := manifest{
 		FormatVersion: FormatVersion,
 		DocCount:      docCount,
 		TermCount:     uint32(len(s.entries)),
-		Files:         map[string]fileInfo{postName: info},
+		BM25K1:        &bm25.K1,
+		BM25B:         &bm25.B,
+		Files:         map[string]fileInfo{postName: info, skipName: skipInfo},
 	}
 	files := []struct {
 		name  string

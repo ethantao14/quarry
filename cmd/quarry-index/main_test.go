@@ -136,7 +136,7 @@ func TestRunWritesIndex(t *testing.T) {
 		}
 		size += info.Size()
 	}
-	wantNames := "manifest.json seg0.dict seg0.ids seg0.lens seg0.post"
+	wantNames := "manifest.json seg0.dict seg0.ids seg0.lens seg0.post seg0.skip"
 	if got := strings.Join(names, " "); got != wantNames {
 		t.Errorf("index files = %q, want %q", got, wantNames)
 	}

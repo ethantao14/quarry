@@ -4,23 +4,25 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/ethantao14/quarry/internal/postings"
 	"github.com/ethantao14/quarry/internal/scoring"
 )
 
 // Index is what query processing needs from an index, in memory or on disk.
 type Index interface {
-	Postings(term string) ([]postings.Posting, error)
+	Cursor(term string) (Cursor, error)
 	DocCount() int
 	DocLen(docID uint32) uint32
 	AvgDocLen() float64
 }
 
+// cursor is one query term's state. doc caches Cursor.DocID(), so the loop over
+// all terms reads a field instead of calling through the interface.
 type cursor struct {
-	postings []postings.Posting
-	position int
-	count    int
-	idf      float64
+	Cursor
+	term  string
+	count int
+	idf   float64
+	doc   uint32
 }
 
 // Exhaustive scores every matching document and returns the best k results.
@@ -42,17 +44,19 @@ func Exhaustive(ix Index, bm25 scoring.BM25, queryTerms []string, k int) ([]Resu
 
 	var cursors []cursor
 	for _, term := range terms {
-		list, err := ix.Postings(term)
+		termCursor, err := ix.Cursor(term)
 		if err != nil {
-			return nil, fmt.Errorf("postings for %q: %w", term, err)
+			return nil, fmt.Errorf("cursor for %q: %w", term, err)
 		}
-		if len(list) == 0 {
+		if termCursor == nil {
 			continue
 		}
 		cursors = append(cursors, cursor{
-			postings: list,
-			count:    counts[term],
-			idf:      scoring.IDF(ix.DocCount(), len(list)),
+			Cursor: termCursor,
+			term:   term,
+			count:  counts[term],
+			idf:    scoring.IDF(ix.DocCount(), termCursor.DocFreq()),
+			doc:    termCursor.DocID(),
 		})
 	}
 
@@ -65,12 +69,14 @@ func Exhaustive(ix Index, bm25 scoring.BM25, queryTerms []string, k int) ([]Resu
 		var score float64
 		for i := range cursors {
 			c := &cursors[i]
-			if c.position == len(c.postings) || c.postings[c.position].DocID != docID {
+			if c.doc != docID {
 				continue
 			}
-			posting := c.postings[c.position]
-			score += float64(c.count) * bm25.TermScore(c.idf, posting.TF, ix.DocLen(docID), ix.AvgDocLen())
-			c.position++
+			score += float64(c.count) * bm25.TermScore(c.idf, c.TF(), ix.DocLen(docID), ix.AvgDocLen())
+			if err := c.Next(); err != nil {
+				return nil, fmt.Errorf("cursor for %q: %w", c.term, err)
+			}
+			c.doc = c.DocID()
 		}
 		top.Offer(Result{DocID: docID, Score: score})
 	}
@@ -81,11 +87,11 @@ func Exhaustive(ix Index, bm25 scoring.BM25, queryTerms []string, k int) ([]Resu
 func nextDocID(cursors []cursor) (uint32, bool) {
 	var smallest uint32
 	found := false
-	for _, c := range cursors {
-		if c.position == len(c.postings) {
+	for i := range cursors {
+		current := cursors[i].doc
+		if current == NoMoreDocs {
 			continue
 		}
-		current := c.postings[c.position].DocID
 		if !found || current < smallest {
 			smallest = current
 			found = true

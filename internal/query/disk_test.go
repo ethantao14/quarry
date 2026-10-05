@@ -1,4 +1,4 @@
-package query
+package query_test
 
 import (
 	"fmt"
@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/ethantao14/quarry/internal/index"
+	"github.com/ethantao14/quarry/internal/query"
 	"github.com/ethantao14/quarry/internal/scoring"
 )
 
@@ -48,13 +49,13 @@ func TestDiskMatchesMemory(t *testing.T) {
 				terms[i] = queryVocabulary[random.IntN(len(queryVocabulary))]
 			}
 			for _, k := range []int{1, 3, 10, 1000} {
-				want, err := Exhaustive(memory, bm25, terms, k)
+				want, err := query.Exhaustive(memory, bm25, terms, k)
 				if err != nil {
 					t.Fatal(err)
 				}
-				got, err := Exhaustive(disk, bm25, terms, k)
+				got, err := query.Exhaustive(disk, bm25, terms, k)
 				if err != nil {
-					t.Fatalf("seed %d: Exhaustive(disk) error = %v", seed, err)
+					t.Fatalf("seed %d: query.Exhaustive(disk) error = %v", seed, err)
 				}
 				// Result holds a float64, so slices.Equal compares scores exactly.
 				if !slices.Equal(got, want) {

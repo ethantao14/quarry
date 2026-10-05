@@ -307,3 +307,16 @@ func TestBuilderAbort(t *testing.T) {
 		t.Error("Add after Abort succeeded")
 	}
 }
+
+func TestBuilderAcrossBlocks(t *testing.T) {
+	random := rand.New(rand.NewPCG(91, 37))
+	docs := make([]builderDocument, 350)
+	for i := range docs {
+		docs[i].id = fmt.Sprint(i)
+		docs[i].terms = []string{"common"}
+		for range random.IntN(30) {
+			docs[i].terms = append(docs[i].terms, fmt.Sprintf("term-%d", random.IntN(8)))
+		}
+	}
+	checkBuilderBudgets(t, docs)
+}

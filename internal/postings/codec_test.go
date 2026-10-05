@@ -122,6 +122,8 @@ func FuzzDecode(f *testing.F) {
 		f.Add(tt.data, tt.count)
 	}
 	f.Fuzz(func(t *testing.T, data []byte, count int) {
+		checkBlockRoundTrip(t, data, count, 0, false)
+		checkBlockRoundTrip(t, data, count, 17, true)
 		list, err := Decode(data, count)
 		if err == nil && !bytes.Equal(Encode(nil, list), data) {
 			t.Fatalf("successful Decode did not round trip: %x", data)
