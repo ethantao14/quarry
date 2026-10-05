@@ -2,10 +2,13 @@ package main
 
 import (
 	"bytes"
+	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ethantao14/quarry/internal/corpus"
 )
@@ -17,6 +20,7 @@ func TestRunFlags(t *testing.T) {
 		wantErr string
 	}{
 		{name: "help", args: []string{"-h"}},
+		{name: "invalid algo", args: []string{"--algo", "invalid"}, wantErr: "--algo must be exhaustive or wand"},
 		{name: "unknown flag", args: []string{"--nope"}, wantErr: "flag provided but not defined"},
 		{name: "no arguments", wantErr: "--dataset is required unless --index, --queries, and --qrels are all set"},
 		{name: "missing dataset", args: []string{"--run", "unused.trec"}, wantErr: "--dataset is required unless --index, --queries, and --qrels are all set"},
@@ -83,7 +87,7 @@ func TestRun(t *testing.T) {
 				if err := run(args, &stdout, &stderr); err != nil {
 					t.Fatalf("run(%q) error = %v, want nil", args, err)
 				}
-				if got := stdout.String(); got != tt.wantStdout {
+				if got := metricsOutput(t, stdout.String()); got != tt.wantStdout {
 					t.Errorf("run(%q) stdout = %q, want %q", args, got, tt.wantStdout)
 				}
 				if got := stderr.String(); got != "" {
@@ -207,7 +211,7 @@ func TestRunDataset(t *testing.T) {
 					t.Errorf("run(%q) run file = %q, want empty", args, contents)
 				}
 			}
-			if got := stdout.String(); got != tt.wantStdout {
+			if got := metricsOutput(t, stdout.String()); got != tt.wantStdout {
 				t.Errorf("run(%q) stdout = %q, want %q", args, got, tt.wantStdout)
 			}
 		})
@@ -271,14 +275,112 @@ func TestRunExplicitPaths(t *testing.T) {
 				t.Fatal("run file is empty")
 			}
 			if tt.name == "BEIR" {
-				baselineRun, baselineStdout = data, stdout.String()
+				baselineRun, baselineStdout = data, metricsOutput(t, stdout.String())
 				return
 			}
 			if !bytes.Equal(data, baselineRun) {
 				t.Errorf("run = %q, want %q", data, baselineRun)
 			}
-			if stdout.String() != baselineStdout {
+			if metricsOutput(t, stdout.String()) != baselineStdout {
 				t.Errorf("stdout = %q, want %q", stdout.String(), baselineStdout)
+			}
+		})
+	}
+}
+
+// metricsOutput validates latency lines and returns the stable metrics prefix.
+func metricsOutput(t *testing.T, output string) string {
+	t.Helper()
+	if output == "" {
+		return ""
+	}
+	metrics, latency, found := strings.Cut(output, "latency_ms_mean\t")
+	if !found {
+		t.Fatal("missing latency lines")
+	}
+	lines := strings.Split(strings.TrimSuffix("latency_ms_mean\t"+latency, "\n"), "\n")
+	keys := []string{"latency_ms_mean", "latency_ms_p50", "latency_ms_p95", "latency_ms_p99"}
+	if len(lines) != len(keys) {
+		t.Fatalf("latency lines = %q", lines)
+	}
+	values := make([]float64, len(keys))
+	for i, key := range keys {
+		name, value, found := strings.Cut(lines[i], "\t")
+		if !found || name != key {
+			t.Fatalf("latency line = %q, want %q", lines[i], key)
+		}
+		number, err := strconv.ParseFloat(value, 64)
+		if err != nil || math.IsNaN(number) || math.IsInf(number, 0) || number < 0 {
+			t.Fatalf("invalid latency %q", value)
+		}
+		_, decimals, _ := strings.Cut(value, ".")
+		if len(decimals) != 3 {
+			t.Fatalf("latency %q must have three decimal places", value)
+		}
+		if strings.HasPrefix(metrics, "queries\t0\n") && number != 0 {
+			t.Fatalf("empty evaluation latency = %g, want zero", number)
+		}
+		values[i] = number
+	}
+	if values[1] > values[2] || values[2] > values[3] {
+		t.Fatalf("unordered percentiles: %v", values)
+	}
+	return metrics
+}
+
+func TestPercentile(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		n    int
+		want [3]time.Duration
+	}{
+		{"empty", 0, [3]time.Duration{0, 0, 0}},
+		{"one", 1, [3]time.Duration{1, 1, 1}},
+		{"two", 2, [3]time.Duration{1, 2, 2}},
+		{"hundred", 100, [3]time.Duration{50, 95, 99}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			durations := make([]time.Duration, tt.n)
+			for i := range durations {
+				durations[i] = time.Duration(i + 1)
+			}
+			for i, p := range []float64{50, 95, 99} {
+				if got := percentile(durations, p); got != tt.want[i] {
+					t.Errorf("percentile(n=%d, p=%g) = %v, want %v", tt.n, p, got, tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestRunAlgorithms(t *testing.T) {
+	for source, sourceArgs := range map[string][]string{
+		"corpus": {"--dataset", "testdata/tiny"},
+		"disk":   {"--dataset", datasetWithoutCorpus(t), "--index", saveTinyIndex(t)},
+	} {
+		t.Run(source, func(t *testing.T) {
+			var baselineRun []byte
+			var baselineMetrics string
+			for _, algo := range []string{"", "exhaustive", "wand"} {
+				runPath := filepath.Join(t.TempDir(), "run.trec")
+				args := append([]string{"--run", runPath}, sourceArgs...)
+				if algo != "" {
+					args = append(args, "--algo", algo)
+				}
+				var stdout, stderr bytes.Buffer
+				if err := run(args, &stdout, &stderr); err != nil {
+					t.Fatal(err)
+				}
+				data, err := os.ReadFile(runPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				metrics := metricsOutput(t, stdout.String())
+				if algo == "" {
+					baselineRun, baselineMetrics = data, metrics
+				} else if !bytes.Equal(data, baselineRun) || metrics != baselineMetrics {
+					t.Fatalf("%s results differ from default", algo)
+				}
 			}
 		})
 	}

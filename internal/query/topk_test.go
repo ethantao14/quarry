@@ -86,3 +86,33 @@ func TestTopKResultsCopy(t *testing.T) {
 		t.Errorf("Results() = %v, want %v", got, want)
 	}
 }
+
+func TestTopKThreshold(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		k      int
+		scores []float64
+		want   float64
+		full   bool
+	}{
+		{"empty", 2, nil, 0, false},
+		{"partial", 2, []float64{3}, 0, false},
+		{"full", 2, []float64{3, 1}, 1, true},
+		{"replacement", 2, []float64{3, 1, 2}, 2, true},
+		{"rejected", 2, []float64{3, 2, 1}, 2, true},
+		{"ties", 2, []float64{2, 2, 2}, 2, true},
+		{"zero score", 1, []float64{0}, 0, true},
+		{"zero k", 0, []float64{1}, 0, false},
+		{"negative k", -1, []float64{1}, 0, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			top := NewTopK(tt.k)
+			for doc, score := range tt.scores {
+				top.Offer(Result{DocID: uint32(doc), Score: score})
+			}
+			if got, full := top.Threshold(); got != tt.want || full != tt.full {
+				t.Errorf("Threshold() = %g, %t, want %g, %t", got, full, tt.want, tt.full)
+			}
+		})
+	}
+}

@@ -74,6 +74,14 @@ func (t *TopK) Offer(r Result) {
 	}
 }
 
+// Threshold returns the k-th best score only when k results are held.
+func (t *TopK) Threshold() (float64, bool) {
+	if t.k <= 0 || len(t.results) < t.k {
+		return 0, false
+	}
+	return t.results[0].Score, true
+}
+
 // Results returns a new slice sorted by descending score, then ascending DocID.
 func (t *TopK) Results() []Result {
 	results := make([]Result, len(t.results))
