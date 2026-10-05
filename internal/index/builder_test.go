@@ -136,8 +136,8 @@ func TestNewBuilder(t *testing.T) {
 		wantErr  string
 	}{
 		{name: "existing directory", budget: 1, existing: true, wantErr: "already exists"},
-		{name: "zero budget", wantErr: "memory budget must be positive"},
-		{name: "negative budget", budget: -1, wantErr: "memory budget must be positive"},
+		{name: "zero budget", wantErr: "chunk budget must be positive"},
+		{name: "negative budget", budget: -1, wantErr: "chunk budget must be positive"},
 		{name: "missing parents", budget: 1},
 		{name: "trailing slash", budget: 1, suffix: string(filepath.Separator)},
 	}
@@ -221,7 +221,8 @@ func TestBuilderMemoryEstimate(t *testing.T) {
 	builder := &Builder{chunk: New()}
 	builder.chunk.Add("old", []string{"existing"})
 	got := builder.estimateDocument("id", []string{"existing", "猫", "猫", ""})
-	want := int64(4 + 16 + 2 + 3*8 + 64 + len("猫") + 64)
+	want := int64(docOverhead + len("id") + 3*postingSize +
+		newTermOverhead + len("猫") + newTermOverhead + len(""))
 	if got != want {
 		t.Fatalf("estimateDocument() = %d, want %d", got, want)
 	}
@@ -252,15 +253,15 @@ func TestBuilderFlushFailure(t *testing.T) {
 }
 
 // TestBuilderFlushesAtBudget checks where chunks end. Each document below is
-// estimated at 4 + 16 + 2 (ID) + 8 (posting) + 2 + 64 (new term) = 96 bytes.
+// estimated at 40 + 2 (ID) + 10 (posting) + 2 + 96 (new term) = 150 bytes.
 func TestBuilderFlushesAtBudget(t *testing.T) {
 	tests := []struct {
 		budget       int64
 		wantSegments int
 	}{
-		{budget: 96, wantSegments: 6},
-		{budget: 192, wantSegments: 3},
-		{budget: 288, wantSegments: 2},
+		{budget: 150, wantSegments: 6},
+		{budget: 300, wantSegments: 3},
+		{budget: 450, wantSegments: 2},
 		{budget: 1000, wantSegments: 0},
 	}
 	for _, tt := range tests {

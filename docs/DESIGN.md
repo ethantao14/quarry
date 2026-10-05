@@ -167,18 +167,28 @@ temporary segments are deleted. If everything fits in the budget, the index is w
   full flush to the drive, so skipping it matters.
 - **A failed build cleans up.** `quarry-index` removes its partial output directory on any error.
 
-What the budget does and does not cover:
+How the budget bounds the whole build:
 
-- **The estimate is approximate.** Per new term it counts the term bytes plus 64 bytes of map and slice
-  overhead; per posting 8 bytes; per document 4 bytes of length plus the ID and a 16-byte string header.
-  On full SciFact and NFCorpus chunks, the live heap was 1.37 and 1.33 times the estimate, most likely
-  from spare capacity left when Go grows postings slices. Go's garbage collector also lets the heap grow
-  to about twice the live data by default. The constants will be tuned against MS MARCO, not these small
-  sets.
-- **The merge is outside the budget.** It holds one dictionary row per distinct term, one decoded
-  postings list at a time, and a mapping per segment. With a tiny budget and thousands of segments,
-  per-segment overhead dominates (SciFact at 16 KB peaked at 130 MB resident), so budgets should be
-  large enough to keep the segment count small.
+- **The chunk gets a third of the budget.** The rest is headroom for the garbage collector, the analysis
+  pipeline, and writing segments.
+- **The budget is Go's soft memory limit** (`debug.SetMemoryLimit`) from 256 MB up, unless a lower
+  `GOMEMLIMIT` is set. By default Go lets the heap grow to about twice the live data before collecting;
+  with a limit it collects more often as the heap nears the budget. The limit must sit well above the
+  live chunk: with a 1 GB chunk under a 1 GB limit, the collector ran almost constantly and the build
+  took 130 s instead of about 72 s. Smaller budgets only size chunks, which tests use to force many segments.
+- **The estimate is measured, not guessed.** Per document it counts 40 bytes plus the ID, per posting 10
+  bytes (8 bytes plus spare capacity from slice growth), and per new term 96 bytes plus the term. These
+  were fitted against the live heap after garbage collection on chunks of SciFact repeated 20 times and of MS MARCO: the old
+  constants (64, 8, 20) read 19 to 25% low on large chunks; the new ones read 2 to 10% high, so chunks
+  flush slightly early.
+- **The merge is outside the chunk.** It holds one dictionary row per distinct term (about 100 MB for MS
+  MARCO's 2.66 million terms), one decoded postings list at a time, and a mapping per segment. That fixed
+  cost is why a 256 MB budget used 297 MiB on MS MARCO, while 512 MB and up stayed within budget.
+- **Memory is measured as peak footprint.** On macOS, Go returns memory with `MADV_FREE_REUSABLE`, and
+  those pages stay in the resident set size until the system reclaims them; at 256 MB, RSS read 1.33 GB
+  while the footprint was 0.29 GB. On Linux, Go returns memory with `MADV_DONTNEED`, so RSS drops right
+  away, but RSS there also counts pages of the memory-mapped segments the merge reads. Linux has not been
+  measured.
 
 ## Parallel text analysis
 

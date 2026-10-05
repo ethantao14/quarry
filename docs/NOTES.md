@@ -57,3 +57,69 @@
   0.96 s and 45 MB peak memory; NFCorpus (3,633 docs, 323 queries) 0.55 s and 27 MB. Command:
   `make build && /usr/bin/time -l ./bin/quarry-eval --dataset data/beir/scifact --run runs/scifact.trec`.
   These are not benchmarks; M4 measures query latency properly.
+
+## M2: on-disk segments and MS MARCO scale
+
+### What was built
+- An on-disk index format (version 1): a sorted, fixed-width term dictionary searched by binary search,
+  postings as delta-encoded doc IDs and term frequencies in varints, document lengths, the
+  internal-to-external ID map, and a manifest with sizes and CRC32C checksums. Every file has a magic
+  number and format version, and a mismatch fails loudly.
+- Reads through memory-mapped files, so opening an index costs almost nothing up front.
+- SPIMI indexing: postings collect in memory until the chunk budget is reached, the chunk is written as
+  a temporary segment, and a k-way merge combines the segments at the end. The output is byte-for-byte
+  the same for any budget.
+- Parallel text analysis with a worker pool that still delivers documents in input order.
+- MS MARCO end to end: TSV input, TREC qrels, indexing statistics, and a memory budget that bounds the
+  whole build.
+
+### What to understand deeply
+1. **Why delta + varint.** Postings are sorted by doc ID, so storing the gap between IDs gives small
+   numbers, and varints spend one byte on numbers below 128. A posting costs 18.91 bits on MS MARCO
+   instead of 64 for two raw uint32s. The decoder must treat its input as hostile: it is fuzzed and
+   returns errors instead of panicking.
+2. **What mmap buys and what it costs.** The operating system loads pages only when touched and keeps
+   them in the page cache, shared across processes and runs. Opening a 10.7 MB index went from 3.1 ms
+   and 10.7 MB of heap (read everything) to 1.75 ms and 5.4 KB. The cost: a page fault on first touch,
+   and memory that the Go garbage collector cannot see or limit.
+3. **Why SPIMI and a k-way merge.** Each chunk takes a contiguous range of doc IDs, so merged postings
+   lists are just concatenated in segment order, with no re-sorting. A min-heap over the segments'
+   sorted dictionaries yields every term once, in order. Sharing one streaming segment writer between
+   the single-pass write and the merge is what makes the output identical for any budget.
+4. **Ordered parallelism.** Each job carries its own one-slot result channel, and the consumer reads
+   jobs in input order from a bounded queue. Workers finish in any order, but documents reach the
+   builder in order, so doc IDs never depend on the worker count. The speedup is capped by what stays
+   serial (decoding and adding postings): 4.2x at 8 workers against a predicted 4.4x ceiling.
+5. **Memory accounting is subtle.** Three surprises: Go lets the heap grow to twice the live data
+   unless given a soft limit; a substring keeps its whole parent string alive (stored doc IDs kept
+   every MS MARCO passage in memory, 1.2 GB); and on macOS the resident set size keeps counting memory
+   Go has already returned, so peak footprint is the honest number. Always measure; the profiler also
+   misled once (it blamed read syscalls that made no difference to wall time).
+
+### Likely interview questions
+- *"How do you build an index bigger than memory?"* Collect postings for a chunk of documents, flush
+  the chunk as a sorted segment when it reaches its budget, and merge the segments with a k-way merge
+  over their sorted dictionaries. Doc IDs are assigned in order, so merging postings is concatenation.
+- *"Why mmap instead of reading files?"* Startup cost and memory scale with what queries touch, not
+  with index size, and the page cache is shared. The trade-off is less control: page faults on cold
+  data, and memory that falls outside the language runtime's accounting.
+- *"Your parallel indexer gets 4.2x on 8 cores. Why not 8x?"* Amdahl's law: JSON decoding and adding
+  postings stay on one goroutine each (about 2.3 s of a 10.5 s build), which caps the speedup near
+  4.4x. Sharding the accumulators would lift the cap at the cost of a merge step.
+
+### Key numbers
+| Dataset  | Metric | quarry | Anserini |
+|----------|--------|-------:|---------:|
+| MS MARCO (dev small) | MRR@10 | 0.1843 | 0.1840 |
+| MS MARCO (dev small) | R@100  | 0.6590 | 0.6578 |
+| MS MARCO (dev small) | R@1000 | 0.8526 | 0.8526 |
+
+- MS MARCO index: 8,841,823 documents, 2,660,824 terms, 266,247,718 postings, 885 MB, 18.91 bits per
+  posting, 352,316,036 total tokens (Anserini's count exactly). Built in 83 s at the default 1 GB budget
+  with 8 workers, peak footprint 0.79 GB (Apple M3, 16 GB RAM, macOS).
+- Before the budget bounded the whole build, the same 1 GB budget used 2.79 GB, and 2 GB used 5.70 GB.
+- Disk index results are identical to the in-memory index on SciFact and NFCorpus, for budgets from
+  16 KB (1,849 segments) to 1 GB.
+- Postings decode at 5.4 to 5.8 ns per posting (`go test -run '^$' -bench Decode -count 3 ./internal/postings`).
+- Analysis speedup on SciFact repeated 20 times: 1 worker 8.94 s, 8 workers 2.51 s, against 10.5 s
+  before parallel analysis (`scripts/bench-workers.sh`).
