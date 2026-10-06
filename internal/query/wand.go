@@ -17,8 +17,8 @@ type wandCursor struct {
 
 // WAND prunes by term score bounds and returns the same best k as Exhaustive.
 func WAND(ix Index, bm25 scoring.BM25, queryTerms []string, k int) ([]Result, error) {
-	if bounds := ix.BM25(); bounds != bm25 {
-		return nil, fmt.Errorf("score bounds were computed with k1=%g b=%g; WAND needs the same parameters", bounds.K1, bounds.B)
+	if err := checkBM25(ix, bm25); err != nil {
+		return nil, err
 	}
 	top := NewTopK(k)
 	if k <= 0 {
@@ -35,27 +35,18 @@ func WAND(ix Index, bm25 scoring.BM25, queryTerms []string, k int) ([]Result, er
 			break
 		}
 		pivotDoc := cursors[pivot].doc
-		if cursors[0].doc == pivotDoc {
-			top.Offer(Result{DocID: pivotDoc, Score: scoreDoc(ix, bm25, cursors, pivotDoc)})
-			for i := range cursors {
-				c := &cursors[i]
-				if c.doc != pivotDoc {
-					break
-				}
-				if err := c.Next(); err != nil {
-					return nil, fmt.Errorf("cursor for %q: %w", c.term, err)
-				}
-				c.doc = c.DocID()
-			}
-		} else {
-			c := advanceCandidate(cursors[:pivot], pivotDoc)
-			if err := c.Advance(pivotDoc); err != nil {
-				return nil, fmt.Errorf("cursor for %q: %w", c.term, err)
-			}
-			c.doc = c.DocID()
+		if err := wandStep(ix, bm25, cursors, pivotDoc, top); err != nil {
+			return nil, err
 		}
 	}
 	return top.Results(), nil
+}
+
+func checkBM25(ix Index, bm25 scoring.BM25) error {
+	if bounds := ix.BM25(); bounds != bm25 {
+		return fmt.Errorf("score bounds were computed with k1=%g b=%g; pruning needs the same parameters", bounds.K1, bounds.B)
+	}
+	return nil
 }
 
 func newWANDCursors(ix Index, queryTerms []string) ([]wandCursor, error) {
@@ -145,4 +136,27 @@ func advanceCandidate(cursors []wandCursor, pivotDoc uint32) *wandCursor {
 		}
 	}
 	return best
+}
+
+func wandStep(ix Index, bm25 scoring.BM25, cursors []wandCursor, pivotDoc uint32, top *TopK) error {
+	if cursors[0].doc == pivotDoc {
+		top.Offer(Result{DocID: pivotDoc, Score: scoreDoc(ix, bm25, cursors, pivotDoc)})
+		for i := range cursors {
+			c := &cursors[i]
+			if c.doc != pivotDoc {
+				break
+			}
+			if err := c.Next(); err != nil {
+				return fmt.Errorf("cursor for %q: %w", c.term, err)
+			}
+			c.doc = c.DocID()
+		}
+	} else {
+		c := advanceCandidate(cursors, pivotDoc)
+		if err := c.Advance(pivotDoc); err != nil {
+			return fmt.Errorf("cursor for %q: %w", c.term, err)
+		}
+		c.doc = c.DocID()
+	}
+	return nil
 }

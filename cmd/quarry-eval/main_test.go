@@ -20,7 +20,7 @@ func TestRunFlags(t *testing.T) {
 		wantErr string
 	}{
 		{name: "help", args: []string{"-h"}},
-		{name: "invalid algo", args: []string{"--algo", "invalid"}, wantErr: "--algo must be exhaustive or wand"},
+		{name: "invalid algo", args: []string{"--algo", "invalid"}, wantErr: "--algo must be exhaustive, wand, or bmw"},
 		{name: "unknown flag", args: []string{"--nope"}, wantErr: "flag provided but not defined"},
 		{name: "no arguments", wantErr: "--dataset is required unless --index, --queries, and --qrels are all set"},
 		{name: "missing dataset", args: []string{"--run", "unused.trec"}, wantErr: "--dataset is required unless --index, --queries, and --qrels are all set"},
@@ -361,7 +361,7 @@ func TestRunAlgorithms(t *testing.T) {
 		t.Run(source, func(t *testing.T) {
 			var baselineRun []byte
 			var baselineMetrics string
-			for _, algo := range []string{"", "exhaustive", "wand"} {
+			for _, algo := range []string{"", "exhaustive", "wand", "bmw"} {
 				runPath := filepath.Join(t.TempDir(), "run.trec")
 				args := append([]string{"--run", runPath}, sourceArgs...)
 				if algo != "" {
@@ -383,5 +383,15 @@ func TestRunAlgorithms(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestDefaultAlgorithm(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{"--help"}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stderr.String(), `retrieval algorithm: bmw, wand, or exhaustive (default "bmw")`) {
+		t.Fatalf("help does not identify BMW as the default: %s", stderr.String())
 	}
 }
