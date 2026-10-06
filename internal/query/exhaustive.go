@@ -13,6 +13,7 @@ type Index interface {
 	DocCount() int
 	DocLen(docID uint32) uint32
 	AvgDocLen() float64
+	BM25() scoring.BM25 // Parameters used for Cursor.MaxScore bounds
 }
 
 // cursor is one query term's state. doc caches Cursor.DocID(), so the loop over

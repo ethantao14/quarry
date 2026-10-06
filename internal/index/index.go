@@ -1,7 +1,10 @@
 // Package index stores which documents contain which terms.
 package index
 
-import "github.com/ethantao14/quarry/internal/postings"
+import (
+	"github.com/ethantao14/quarry/internal/postings"
+	"github.com/ethantao14/quarry/internal/scoring"
+)
 
 // Index is an in-memory inverted index. Internal doc IDs are assigned in
 // the order documents are added, so every postings list is sorted by DocID.
@@ -15,6 +18,11 @@ type Index struct {
 // New returns an empty index.
 func New() *Index {
 	return &Index{postings: make(map[string][]postings.Posting)}
+}
+
+// BM25 returns the parameters used to compute cursor score bounds.
+func (ix *Index) BM25() scoring.BM25 {
+	return scoring.DefaultBM25()
 }
 
 // Add indexes a document's terms and returns its internal doc ID.

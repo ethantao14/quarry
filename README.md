@@ -6,7 +6,7 @@ It is evaluated on the public MS MARCO and BEIR benchmarks against published BM2
 
 **Status:** English text analysis, BM25 search, evaluation, and on-disk indexes (built within a
 memory budget, read back with memory mapping) work, including the full MS MARCO passage corpus.
-Dynamic pruning (WAND, Block-Max WAND) is not implemented yet.
+WAND retrieval returns identical results to exhaustive search. Block-Max WAND is not implemented yet.
 
 ## Requirements
 
@@ -59,6 +59,10 @@ format version and must be rebuilt with `quarry-index`.
 
 ## Evaluation
 
+Both `quarry-search` and `quarry-eval` accept `--algo exhaustive` (the default) or `--algo wand`.
+WAND uses score bounds to skip candidates and returns identical document IDs, ordering, and scores.
+WAND requires the same BM25 parameters used to compute the index's score bounds.
+
 ```sh
 scripts/download.sh scifact
 go run ./cmd/quarry-eval --dataset data/beir/scifact --run runs/scifact.trec --k 1000
@@ -87,7 +91,25 @@ nDCG@10	<value>
 R@100	<value>
 R@1000	<value>
 MRR@10	<value>
+latency_ms_mean	<value>
+latency_ms_p50	<value>
+latency_ms_p95	<value>
+latency_ms_p99	<value>
 ```
+
+Latency is measured per query around the search call only, excluding analysis and run writing.
+The latency lines report milliseconds to three decimal places, with nearest-rank percentiles;
+an evaluation with no queries reports zero latency.
+
+Compare both algorithms on a saved index with:
+
+```sh
+scripts/bench-search.sh <index dir> <queries> <qrels>
+```
+
+The script builds `quarry-eval`, warms up each algorithm and result limit, then prints MRR and
+latency statistics. It saves measured runs under `data/bench/search-<algo>-k<k>.trec` and checks
+that each pair of run files is byte-identical.
 
 Metrics are computed like `trec_eval` from the saved run, with score ties broken by
 document ID descending and averages over all judged queries, including those with no results.

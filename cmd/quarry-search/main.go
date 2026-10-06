@@ -38,6 +38,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	showVersion := flags.Bool("version", false, "print the version and exit")
 	corpusPath := flags.String("corpus", "", "path to a BEIR JSONL corpus")
 	indexPath := flags.String("index", "", "path to a saved index directory")
+	algo := flags.String("algo", "exhaustive", "retrieval algorithm: exhaustive or wand")
 	k := flags.Int("k", 10, "number of results to return")
 
 	err := flags.Parse(args)
@@ -50,6 +51,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 
 	if *showVersion {
 		_, err := fmt.Fprintf(stdout, "quarry-search %s\n", version)
+		return err
+	}
+	if err := query.CheckAlgorithm(*algo); err != nil {
 		return err
 	}
 	if *corpusPath == "" && *indexPath == "" {
@@ -81,7 +85,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	results, err := query.Exhaustive(ix, scoring.DefaultBM25(), queryTerms, *k)
+	results, err := query.Search(*algo, ix, scoring.DefaultBM25(), queryTerms, *k)
 	if err != nil {
 		return err
 	}

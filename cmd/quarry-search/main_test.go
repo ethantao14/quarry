@@ -93,3 +93,43 @@ func TestRunIndexMatchesCorpus(t *testing.T) {
 		}
 	}
 }
+
+func TestRunAlgorithms(t *testing.T) {
+	ix, err := corpus.LoadFile("testdata/tiny.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexPath := filepath.Join(t.TempDir(), "idx")
+	if err := ix.Write(indexPath); err != nil {
+		t.Fatal(err)
+	}
+	for source, sourceArgs := range map[string][]string{
+		"corpus": {"--corpus", "testdata/tiny.jsonl"},
+		"disk":   {"--index", indexPath},
+	} {
+		t.Run(source, func(t *testing.T) {
+			for _, algo := range []string{"", "exhaustive", "wand", "invalid"} {
+				args := append([]string{"--k", "2"}, sourceArgs...)
+				if algo != "" {
+					args = append(args, "--algo", algo)
+				}
+				args = append(args, "fish")
+				var stdout, stderr bytes.Buffer
+				err := run(args, &stdout, &stderr)
+				if algo == "invalid" {
+					if err == nil || err.Error() != "--algo must be exhaustive or wand" {
+						t.Fatalf("invalid algo error = %v", err)
+					}
+					continue
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := "1\tfish-short\t0.2795\n2\tfish-twin\t0.2795\n"
+				if got := stdout.String(); got != want {
+					t.Errorf("algo %q stdout = %q, want %q", algo, got, want)
+				}
+			}
+		})
+	}
+}
