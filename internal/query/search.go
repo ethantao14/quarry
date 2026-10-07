@@ -8,8 +8,8 @@ import (
 
 // CheckAlgorithm reports whether algo names a retrieval algorithm Search accepts.
 func CheckAlgorithm(algo string) error {
-	if algo != "exhaustive" && algo != "wand" {
-		return errors.New("--algo must be exhaustive or wand")
+	if algo != "exhaustive" && algo != "wand" && algo != "bmw" {
+		return errors.New("--algo must be exhaustive, wand, or bmw")
 	}
 	return nil
 }
@@ -18,6 +18,9 @@ func CheckAlgorithm(algo string) error {
 func Search(algo string, ix Index, bm25 scoring.BM25, terms []string, k int) ([]Result, error) {
 	if err := CheckAlgorithm(algo); err != nil {
 		return nil, err
+	}
+	if algo == "bmw" {
+		return BMW(ix, bm25, terms, k)
 	}
 	if algo == "wand" {
 		return WAND(ix, bm25, terms, k)

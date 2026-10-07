@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ethantao14/quarry/internal/corpus"
@@ -108,7 +109,7 @@ func TestRunAlgorithms(t *testing.T) {
 		"disk":   {"--index", indexPath},
 	} {
 		t.Run(source, func(t *testing.T) {
-			for _, algo := range []string{"", "exhaustive", "wand", "invalid"} {
+			for _, algo := range []string{"", "exhaustive", "wand", "bmw", "invalid"} {
 				args := append([]string{"--k", "2"}, sourceArgs...)
 				if algo != "" {
 					args = append(args, "--algo", algo)
@@ -117,7 +118,7 @@ func TestRunAlgorithms(t *testing.T) {
 				var stdout, stderr bytes.Buffer
 				err := run(args, &stdout, &stderr)
 				if algo == "invalid" {
-					if err == nil || err.Error() != "--algo must be exhaustive or wand" {
+					if err == nil || err.Error() != "--algo must be exhaustive, wand, or bmw" {
 						t.Fatalf("invalid algo error = %v", err)
 					}
 					continue
@@ -131,5 +132,15 @@ func TestRunAlgorithms(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestDefaultAlgorithm(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{"--help"}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stderr.String(), `retrieval algorithm: bmw, wand, or exhaustive (default "bmw")`) {
+		t.Fatalf("help does not identify BMW as the default: %s", stderr.String())
 	}
 }

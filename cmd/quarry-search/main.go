@@ -38,7 +38,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	showVersion := flags.Bool("version", false, "print the version and exit")
 	corpusPath := flags.String("corpus", "", "path to a BEIR JSONL corpus")
 	indexPath := flags.String("index", "", "path to a saved index directory")
-	algo := flags.String("algo", "exhaustive", "retrieval algorithm: exhaustive or wand")
+	algo := flags.String("algo", "bmw", "retrieval algorithm: bmw, wand, or exhaustive")
 	k := flags.Int("k", 10, "number of results to return")
 
 	err := flags.Parse(args)

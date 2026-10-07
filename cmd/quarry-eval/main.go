@@ -44,7 +44,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	queriesPath := flags.String("queries", "", "BEIR JSONL or .tsv queries path (default <dataset>/queries.jsonl)")
 	qrelsPath := flags.String("qrels", "", "BEIR TSV or TREC qrels path (default <dataset>/qrels/test.tsv)")
 	runPath := flags.String("run", "", "path to the output TREC run file")
-	algo := flags.String("algo", "exhaustive", "retrieval algorithm: exhaustive or wand")
+	algo := flags.String("algo", "bmw", "retrieval algorithm: bmw, wand, or exhaustive")
 	k := flags.Int("k", 1000, "number of results per query")
 
 	err := flags.Parse(args)

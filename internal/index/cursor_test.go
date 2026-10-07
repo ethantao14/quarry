@@ -35,7 +35,7 @@ func cursorIndex(count int, seed uint64) *Index {
 }
 
 func TestCursors(t *testing.T) {
-	lengths := []int{1, 127, 128, 129, 256, 300}
+	lengths := []int{1, 127, 128, 129, 256, 300, 2049, 4096}
 	random := rand.New(rand.NewPCG(7, 11))
 	for range 10 {
 		lengths = append(lengths, random.IntN(1000)+1)
@@ -55,6 +55,7 @@ func TestCursors(t *testing.T) {
 			if disk.BM25() != scoring.DefaultBM25() {
 				t.Fatalf("BM25() = %v", disk.BM25())
 			}
+			checkShallowBlocks(t, memory, disk)
 			list := memory.postings["term"]
 			for _, source := range []struct {
 				name  string
@@ -94,6 +95,7 @@ func TestCursors(t *testing.T) {
 					}
 					var got []postings.Posting
 					for c.DocID() != query.NoMoreDocs {
+						checkCursorPosition(t, c, list, len(got))
 						got = append(got, postings.Posting{DocID: c.DocID(), TF: c.TF()})
 						if err := c.Next(); err != nil {
 							t.Fatal(err)
@@ -176,6 +178,15 @@ func checkCursorPosition(t *testing.T, c query.Cursor, list []postings.Posting, 
 	}
 	if c.DocID() != want.DocID || c.TF() != want.TF {
 		t.Fatalf("cursor = (%d, %d), want %v", c.DocID(), c.TF(), want)
+	}
+	last, score := c.BlockMax()
+	wantLast := uint32(query.NoMoreDocs)
+	if position < len(list) {
+		end := min((position/postings.BlockSize+1)*postings.BlockSize, len(list))
+		wantLast = list[end-1].DocID
+	}
+	if last != wantLast || (position == len(list) && score != 0) {
+		t.Fatalf("BlockMax() = (%d, %g), want last doc %d", last, score, wantLast)
 	}
 }
 
@@ -291,4 +302,106 @@ func TestConcurrentCursors(t *testing.T) {
 		}
 	}
 	wg.Wait()
+}
+
+func checkShallowBlocks(t *testing.T, memory *Index, disk *Disk) {
+	t.Helper()
+	mc, err := memory.Cursor("term")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dc, err := disk.Cursor("term")
+	if err != nil {
+		t.Fatal(err)
+	}
+	list := memory.postings["term"]
+	idf := scoring.IDF(memory.DocCount(), len(list))
+	var maximum float32
+	for start := 0; start < len(list); start += postings.BlockSize {
+		end := min(start+postings.BlockSize, len(list))
+		last, score := mc.BlockMax()
+		diskLast, diskScore := dc.BlockMax()
+		if last != list[end-1].DocID || diskLast != last || math.Float32bits(diskScore) != math.Float32bits(score) {
+			t.Fatalf("block %d: memory = (%d, %g), disk = (%d, %g)", start/postings.BlockSize, last, score, diskLast, diskScore)
+		}
+		var exact float64
+		for _, p := range list[start:end] {
+			value := scoring.DefaultBM25().TermScore(idf, p.TF, memory.DocLen(p.DocID), memory.AvgDocLen())
+			if float64(score) < value {
+				t.Fatalf("block bound %g < score %g", score, value)
+			}
+			exact = max(exact, value)
+		}
+		if score != roundScoreUp(exact) {
+			t.Fatalf("block bound = %g, want %g", score, roundScoreUp(exact))
+		}
+		maximum = max(maximum, score)
+		for _, c := range []query.Cursor{mc, dc} {
+			for _, target := range []uint32{last, 0, last} {
+				c.ShallowAdvance(target)
+				if gotLast, gotScore := c.BlockMax(); gotLast != last || gotScore != score {
+					t.Fatalf("ShallowAdvance(%d) moved backward or changed bounds", target)
+				}
+			}
+			c.ShallowAdvance(last + 1)
+			if c.DocID() != list[0].DocID || c.TF() != list[0].TF {
+				t.Fatal("ShallowAdvance changed posting")
+			}
+		}
+		if dc.(*diskCursor).block != 0 {
+			t.Fatal("ShallowAdvance decoded a block")
+		}
+	}
+	for _, c := range []query.Cursor{mc, dc} {
+		if c.MaxScore() != maximum {
+			t.Fatalf("MaxScore() = %g, max block score = %g", c.MaxScore(), maximum)
+		}
+		for _, target := range []uint32{0, query.NoMoreDocs, 0} {
+			c.ShallowAdvance(target)
+			if last, score := c.BlockMax(); last != query.NoMoreDocs || score != 0 {
+				t.Fatalf("past end BlockMax() = (%d, %g)", last, score)
+			}
+		}
+	}
+	if len(list) <= postings.BlockSize {
+		return
+	}
+	for _, ix := range []query.Index{memory, disk} {
+		c, err := ix.Cursor("term")
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.ShallowAdvance(list[len(list)-1].DocID)
+		last, score := c.BlockMax()
+		if err := c.Next(); err != nil {
+			t.Fatal(err)
+		}
+		if gotLast, gotScore := c.BlockMax(); gotLast != last || gotScore != score {
+			t.Fatal("Next moved block pointer backward")
+		}
+		if err := c.Advance(list[postings.BlockSize].DocID); err != nil {
+			t.Fatal(err)
+		}
+		if gotLast, gotScore := c.BlockMax(); gotLast != last || gotScore != score {
+			t.Fatal("Advance moved block pointer backward")
+		}
+	}
+}
+
+func BenchmarkShallowAdvance(b *testing.B) {
+	disk := benchmarkCursorIndex(b)
+	b.ReportAllocs()
+	for b.Loop() {
+		c, err := disk.Cursor("term")
+		if err != nil {
+			b.Fatal(err)
+		}
+		for {
+			last, _ := c.BlockMax()
+			if last == query.NoMoreDocs {
+				break
+			}
+			c.ShallowAdvance(last + 1)
+		}
+	}
 }

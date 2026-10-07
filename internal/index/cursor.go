@@ -41,6 +41,7 @@ type diskCursor struct {
 	buffer   [postings.BlockSize]postings.Posting
 	list     []postings.Posting
 	block    int
+	shallow  int
 	position int
 }
 
@@ -84,6 +85,7 @@ func (c *diskCursor) decodeBlock(block int) error {
 	}
 	c.list = list
 	c.block = block
+	c.shallow = max(c.shallow, block)
 	c.position = 0
 	return nil
 }
@@ -110,6 +112,9 @@ func (c *diskCursor) Next() error {
 	if c.position == len(c.list) && c.block+1 < len(c.skip)/skipEntrySize {
 		return c.decodeBlock(c.block + 1)
 	}
+	if c.position == len(c.list) {
+		c.shallow = len(c.skip) / skipEntrySize
+	}
 	return nil
 }
 
@@ -117,11 +122,11 @@ func (c *diskCursor) Advance(target uint32) error {
 	if target <= c.DocID() {
 		return nil
 	}
-	block := sort.Search(len(c.skip)/skipEntrySize, func(i int) bool {
-		return c.skipEntry(i).lastDocID >= target
-	})
+	// Blocks before the current one end before the current doc, so before target.
+	block := c.firstBlockFrom(c.block, target)
 	if block == len(c.skip)/skipEntrySize {
 		c.position = len(c.list)
+		c.shallow = block
 		return nil
 	}
 	if block != c.block {
@@ -139,6 +144,30 @@ func (c *diskCursor) DocFreq() int { return int(c.entry.docFreq) }
 
 func (c *diskCursor) MaxScore() float32 { return c.entry.maxScore }
 
+func (c *diskCursor) ShallowAdvance(target uint32) {
+	c.shallow = c.firstBlockFrom(c.shallow, target)
+}
+
+// firstBlockFrom returns the first block at or after from whose last doc is at least
+// target, or the block count. Most targets fall in block from, so it is checked first.
+func (c *diskCursor) firstBlockFrom(from int, target uint32) int {
+	count := len(c.skip) / skipEntrySize
+	if from == count || c.skipEntry(from).lastDocID >= target {
+		return from
+	}
+	return from + 1 + sort.Search(count-from-1, func(i int) bool {
+		return c.skipEntry(from+1+i).lastDocID >= target
+	})
+}
+
+func (c *diskCursor) BlockMax() (uint32, float32) {
+	if c.shallow == len(c.skip)/skipEntrySize {
+		return query.NoMoreDocs, 0
+	}
+	skip := c.skipEntry(c.shallow)
+	return skip.lastDocID, skip.blockMax
+}
+
 // Cursor returns a cursor on the first posting, or nil if term is absent.
 // Finish adding documents before creating cursors.
 func (ix *Index) Cursor(term string) (query.Cursor, error) {
@@ -153,6 +182,8 @@ type memoryCursor struct {
 	index    *Index
 	list     []postings.Posting
 	position int
+	shallow  int
+	blocks   []float32
 	maximum  float32
 	scored   bool
 }
@@ -174,6 +205,7 @@ func (c *memoryCursor) TF() uint32 {
 func (c *memoryCursor) Next() error {
 	if c.position < len(c.list) {
 		c.position++
+		c.syncBlock()
 	}
 	return nil
 }
@@ -185,6 +217,7 @@ func (c *memoryCursor) Advance(target uint32) error {
 	c.position += sort.Search(len(c.list)-c.position, func(i int) bool {
 		return c.list[c.position+i].DocID >= target
 	})
+	c.syncBlock()
 	return nil
 }
 
@@ -192,15 +225,60 @@ func (c *memoryCursor) DocFreq() int { return len(c.list) }
 
 func (c *memoryCursor) MaxScore() float32 {
 	if !c.scored {
-		bm25 := scoring.DefaultBM25()
-		idf := scoring.IDF(c.index.DocCount(), len(c.list))
-		var maximum float64
-		for _, posting := range c.list {
-			score := bm25.TermScore(idf, posting.TF, c.index.DocLen(posting.DocID), c.index.AvgDocLen())
-			maximum = max(maximum, score)
+		for block := 0; block < c.blockCount(); block++ {
+			c.maximum = max(c.maximum, c.blockScore(block))
 		}
-		c.maximum = roundScoreUp(maximum)
 		c.scored = true
 	}
 	return c.maximum
+}
+
+func (c *memoryCursor) blockCount() int {
+	return (len(c.list) + postings.BlockSize - 1) / postings.BlockSize
+}
+
+func (c *memoryCursor) syncBlock() {
+	if c.position == len(c.list) {
+		c.shallow = c.blockCount()
+	} else {
+		c.shallow = max(c.shallow, c.position/postings.BlockSize)
+	}
+}
+
+func (c *memoryCursor) blockLast(block int) uint32 {
+	end := min((block+1)*postings.BlockSize, len(c.list))
+	return c.list[end-1].DocID
+}
+
+func (c *memoryCursor) ShallowAdvance(target uint32) {
+	c.shallow += sort.Search(c.blockCount()-c.shallow, func(i int) bool {
+		return c.blockLast(c.shallow+i) >= target
+	})
+}
+
+func (c *memoryCursor) BlockMax() (uint32, float32) {
+	if c.shallow == c.blockCount() {
+		return query.NoMoreDocs, 0
+	}
+	return c.blockLast(c.shallow), c.blockScore(c.shallow)
+}
+
+func (c *memoryCursor) blockScore(block int) float32 {
+	if c.blocks == nil {
+		c.blocks = make([]float32, c.blockCount())
+	}
+	// Nonempty blocks have positive scores with DefaultBM25, so zero means uncached.
+	if c.blocks[block] == 0 {
+		bm25 := scoring.DefaultBM25()
+		idf := scoring.IDF(c.index.DocCount(), len(c.list))
+		start := block * postings.BlockSize
+		end := min(start+postings.BlockSize, len(c.list))
+		var maximum float64
+		for _, posting := range c.list[start:end] {
+			score := bm25.TermScore(idf, posting.TF, c.index.DocLen(posting.DocID), c.index.AvgDocLen())
+			maximum = max(maximum, score)
+		}
+		c.blocks[block] = roundScoreUp(maximum)
+	}
+	return c.blocks[block]
 }

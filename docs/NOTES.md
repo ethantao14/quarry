@@ -123,3 +123,76 @@
 - Postings decode at 5.4 to 5.8 ns per posting (`go test -run '^$' -bench Decode -count 3 ./internal/postings`).
 - Analysis speedup on SciFact repeated 20 times: 1 worker 8.94 s, 8 workers 2.51 s, against 10.5 s
   before parallel analysis (`scripts/bench-workers.sh`).
+
+## M3: dynamic pruning
+
+### What was built
+- Block format v2: 128-posting blocks with varint doc ID gaps and term frequencies inside each
+  block. `seg0.skip` has 12-byte entries holding lastDoc, offset, and blockMax. The dictionary
+  stores a per-term maxScore. Bounds are computed in float64 and rounded up to float32.
+- Memory and disk cursors with `Next` and `Advance`; disk `Advance` binary-searches skip data
+  and decodes only the destination block. Memory cursors lazily cache matching block bounds.
+- WAND retrieval using per-term upper bounds and a top-k heap, plus Block-Max WAND (BMW) using
+  shallow advance and tighter block bounds. Shallow advance moves only the block pointer,
+  without decoding postings or changing the current posting.
+- BMW as the default in search and evaluation, with `--algo wand` and `--algo exhaustive` available.
+  Randomized tests compare exact results on memory and disk indexes; the search benchmark script
+  compares all three algorithms and checks byte-identical runs.
+
+### What to understand deeply
+1. **WAND's pivot.** Sort cursors by current doc ID, then accumulate term bounds until their sum
+   can beat the heap threshold. That cursor's doc ID is the pivot. Earlier docs cannot win.
+   If all leading cursors reach the pivot, score it; otherwise advance a cursor toward it.
+2. **BMW's tighter bound.** Include every cursor on the pivot doc, then shallow-advance the prefix
+   to its blocks covering that doc and sum their block bounds. If the sum cannot win, skip toward
+   the earliest block end plus one, capped by the first cursor outside the prefix. Before that
+   boundary, only prefix terms can contribute, each within its current block. WAND already rules
+   out docs before the pivot. Advancing one prefix cursor preserves every possible winner.
+3. **Exact means exact.** Query terms have a stable lexical rank, and score contributions are
+   summed in that rank order to match Exhaustive's float64 bits. Docs are scored in ascending ID
+   order, so later docs must strictly beat the threshold because ties favor lower IDs. Bounds
+   rounded upward and a conservative 1e-9 comparison margin protect against floating point
+   summation differences. The margin can cause extra work, but cannot remove a winner.
+4. **Pruning has overhead.** At k=1000 the heap takes longer to fill and its threshold stays lower,
+   so little is skipped and the bookkeeping (cursor ordering, pivot search, advances) shows. The
+   first WAND was 7% slower than exhaustive at k=1000 until advances stopped searching skip data
+   from block zero. BMW's extra block checks win at k=10 but cost a little at k=1000.
+5. **Bounds belong to a scoring model.** Stored bounds use the index's BM25 parameters and corpus
+   statistics. Changing k1 or b can invalidate them. WAND and BMW reject mismatched parameters;
+   exhaustive search can still score with another BM25 configuration.
+
+### Likely interview questions
+- *"Why can you skip a document without scoring it?"* A safe upper bound on all contributions is
+  below the score needed to enter the full heap. The pivot argument excludes earlier docs, and
+  BMW's block boundary limits how far the tighter bound remains valid.
+- *"Why store a separate shallow pointer?"* Checking bounds needs only skip metadata. Keeping the
+  posting position unchanged avoids decoding blocks until an actual advance needs their postings.
+- *"How do you preserve exact results despite float32 bounds?"* Round bounds upward, use a small
+  conservative comparison margin, score in the reference term order, and preserve the same tie rule.
+- *"Why might a pruning algorithm lose to exhaustive search?"* Large k or loose bounds can leave
+  nearly every candidate to score while adding sorting, branching, and cursor management costs.
+- *"Can you tune BM25 at query time?"* Exhaustive search can; pruning needs bounds computed for the
+  same parameters, or a rebuild with the new scoring model.
+
+### Key numbers
+MS MARCO dev small, 6,980 queries, search time only, warm page cache, one warm-up run discarded
+(Apple M3, 16 GB RAM, macOS). Runs of all three algorithms are byte-identical; MRR@10 0.1844 at
+k=10 and 0.1843 at k=1000.
+
+| Algorithm  | k    | mean ms | p50 ms | p95 ms | p99 ms |
+|------------|------|--------:|-------:|-------:|-------:|
+| exhaustive | 10   | 25.12   | 17.52  | 72.70  | 115.39 |
+| WAND       | 10   | 7.62    | 4.77   | 23.97  | 40.88  |
+| BMW        | 10   | 6.92    | 4.07   | 22.71  | 42.27  |
+| exhaustive | 1000 | 25.97   | 18.38  | 73.45  | 116.51 |
+| WAND       | 1000 | 18.26   | 13.04  | 50.73  | 83.38  |
+| BMW        | 1000 | 19.93   | 13.74  | 57.12  | 94.86  |
+
+Reproduce with `scripts/bench-search.sh <index> data/msmarco/queries.dev.small.tsv
+data/msmarco/qrels.dev.small.tsv`.
+
+- Format v2 on MS MARCO: 973.0 MB (was 885.3 MB, +9.9%); postings stay at 18.91 bits per posting,
+  `seg0.skip` adds 55.8 MB (12 bytes per 128-posting block), and the build took 81 s (was 73 s).
+- Searching skip data from the current block instead of block zero, plus an insertion sort over
+  cursor pointers, cut 1,000-query averages at k=1000 from 34.3 to 19.5 ms (BMW) and 28.5 to
+  19.8 ms (WAND), and BMW at k=10 from 13.0 to 7.2 ms.

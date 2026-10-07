@@ -6,7 +6,7 @@ It is evaluated on the public MS MARCO and BEIR benchmarks against published BM2
 
 **Status:** English text analysis, BM25 search, evaluation, and on-disk indexes (built within a
 memory budget, read back with memory mapping) work, including the full MS MARCO passage corpus.
-WAND retrieval returns identical results to exhaustive search. Block-Max WAND is not implemented yet.
+WAND and Block-Max WAND retrieval are implemented and return identical results to exhaustive search.
 
 ## Requirements
 
@@ -59,9 +59,10 @@ format version and must be rebuilt with `quarry-index`.
 
 ## Evaluation
 
-Both `quarry-search` and `quarry-eval` accept `--algo exhaustive` (the default) or `--algo wand`.
-WAND uses score bounds to skip candidates and returns identical document IDs, ordering, and scores.
-WAND requires the same BM25 parameters used to compute the index's score bounds.
+Both `quarry-search` and `quarry-eval` accept `--algo bmw` (the default), `--algo wand`, or
+`--algo exhaustive`. All three return identical document IDs, ordering, and scores.
+WAND uses term score bounds to skip candidates; Block-Max WAND also skips using tighter block bounds.
+Both require the same BM25 parameters used to compute the index's score bounds.
 
 ```sh
 scripts/download.sh scifact
@@ -101,7 +102,7 @@ Latency is measured per query around the search call only, excluding analysis an
 The latency lines report milliseconds to three decimal places, with nearest-rank percentiles;
 an evaluation with no queries reports zero latency.
 
-Compare both algorithms on a saved index with:
+Compare all three algorithms on a saved index with:
 
 ```sh
 scripts/bench-search.sh <index dir> <queries> <qrels>
@@ -109,7 +110,7 @@ scripts/bench-search.sh <index dir> <queries> <qrels>
 
 The script builds `quarry-eval`, warms up each algorithm and result limit, then prints MRR and
 latency statistics. It saves measured runs under `data/bench/search-<algo>-k<k>.trec` and checks
-that each pair of run files is byte-identical.
+that both WAND and BMW run files are byte-identical to exhaustive search.
 
 Metrics are computed like `trec_eval` from the saved run, with score ties broken by
 document ID descending and averages over all judged queries, including those with no results.

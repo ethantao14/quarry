@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Compares exhaustive and WAND search latency and verifies identical runs.
+# Compares exhaustive, WAND, and BMW search latency and verifies identical runs.
 # Usage: scripts/bench-search.sh <index dir> <queries> <qrels>
 set -euo pipefail
 
@@ -18,7 +18,7 @@ mkdir -p "$bench_dir"
 
 printf "algo\tk\tMRR@10\tmean\tp50\tp95\tp99\n"
 for k in 10 1000; do
-    for algo in exhaustive wand; do
+    for algo in exhaustive wand bmw; do
         args=(--index "$index" --queries "$queries" --qrels "$qrels" --algo "$algo" --k "$k")
         run_path="$bench_dir/search-$algo-k$k.trec"
         "$repo_root/bin/quarry-eval" "${args[@]}" --run "$run_path" > /dev/null
@@ -35,5 +35,6 @@ for k in 10 1000; do
 done
 for k in 10 1000; do
     cmp "$bench_dir/search-exhaustive-k$k.trec" "$bench_dir/search-wand-k$k.trec"
+    cmp "$bench_dir/search-exhaustive-k$k.trec" "$bench_dir/search-bmw-k$k.trec"
     echo "k=$k: runs identical"
 done
