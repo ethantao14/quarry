@@ -50,11 +50,11 @@ func BMW(ix Index, bm25 scoring.BM25, queryTerms []string, k int) ([]Result, err
 	return top.Results(), nil
 }
 
-func blockBound(cursors []wandCursor, pivot int) (float64, uint32) {
+func blockBound(cursors []*wandCursor, pivot int) (float64, uint32) {
 	var bound float64
 	next := uint64(NoMoreDocs)
 	for i := 0; i <= pivot; i++ {
-		c := &cursors[i]
+		c := cursors[i]
 		c.ShallowAdvance(cursors[pivot].doc)
 		lastDoc, score := c.BlockMax()
 		bound += float64(c.count) * float64(score)

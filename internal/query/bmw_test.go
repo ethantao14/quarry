@@ -1,6 +1,38 @@
 package query
 
-import "testing"
+import (
+	"slices"
+	"testing"
+)
+
+func TestReorder(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		docs []uint32 // Cursor i has rank i
+		want []int    // Ranks after reorder
+	}{
+		{"sorted", []uint32{1, 2, 3}, []int{0, 1, 2}},
+		{"reversed", []uint32{3, 2, 1}, []int{2, 1, 0}},
+		{"smallest last", []uint32{2, 3, 4, 1}, []int{3, 0, 1, 2}},
+		{"ties by rank", []uint32{5, 5, 1, 5}, []int{2, 0, 1, 3}},
+		{"drops exhausted", []uint32{NoMoreDocs, 4, NoMoreDocs, 2}, []int{3, 1}},
+		{"all exhausted", []uint32{NoMoreDocs, NoMoreDocs}, []int{}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cursors := make([]*wandCursor, len(tt.docs))
+			for i, doc := range tt.docs {
+				cursors[i] = &wandCursor{cursor: cursor{doc: doc}, rank: i}
+			}
+			got := []int{}
+			for _, c := range reorder(cursors) {
+				got = append(got, c.rank)
+			}
+			if !slices.Equal(got, tt.want) {
+				t.Fatalf("reorder ranks = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
 
 type blockBoundCursor struct {
 	Cursor
@@ -30,9 +62,9 @@ func TestBlockBoundBoundary(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			c := &blockBoundCursor{last: tt.last, score: tt.score}
-			cursors := []wandCursor{{cursor: cursor{Cursor: c, doc: 10, count: 3}}}
+			cursors := []*wandCursor{{cursor: cursor{Cursor: c, doc: 10, count: 3}}}
 			if tt.nextDoc != NoMoreDocs {
-				cursors = append(cursors, wandCursor{cursor: cursor{doc: tt.nextDoc}})
+				cursors = append(cursors, &wandCursor{cursor: cursor{doc: tt.nextDoc}})
 			}
 			bound, next := blockBound(cursors, 0)
 			if bound != tt.bound || next != tt.want || c.target != 10 {

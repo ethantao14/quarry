@@ -1,9 +1,7 @@
 package query
 
 import (
-	"cmp"
 	"fmt"
-	"slices"
 	"sort"
 
 	"github.com/ethantao14/quarry/internal/scoring"
@@ -49,7 +47,7 @@ func checkBM25(ix Index, bm25 scoring.BM25) error {
 	return nil
 }
 
-func newWANDCursors(ix Index, queryTerms []string) ([]wandCursor, error) {
+func newWANDCursors(ix Index, queryTerms []string) ([]*wandCursor, error) {
 	counts := make(map[string]int)
 	for _, term := range queryTerms {
 		counts[term]++
@@ -59,7 +57,7 @@ func newWANDCursors(ix Index, queryTerms []string) ([]wandCursor, error) {
 		terms = append(terms, term)
 	}
 	sort.Strings(terms)
-	cursors := make([]wandCursor, 0, len(terms))
+	cursors := make([]*wandCursor, 0, len(terms))
 	for rank, term := range terms {
 		c, err := ix.Cursor(term)
 		if err != nil {
@@ -68,7 +66,7 @@ func newWANDCursors(ix Index, queryTerms []string) ([]wandCursor, error) {
 		if c == nil {
 			continue
 		}
-		cursors = append(cursors, wandCursor{
+		cursors = append(cursors, &wandCursor{
 			cursor: cursor{
 				Cursor: c,
 				term:   term,
@@ -83,20 +81,32 @@ func newWANDCursors(ix Index, queryTerms []string) ([]wandCursor, error) {
 	return cursors, nil
 }
 
-func reorder(cursors []wandCursor) []wandCursor {
-	slices.SortFunc(cursors, func(a, b wandCursor) int {
-		if a.doc == b.doc {
-			return cmp.Compare(a.rank, b.rank)
+// reorder sorts cursors by doc ID, then rank, and drops exhausted ones. Only a few
+// cursors move per step, so an insertion sort over pointers is nearly one pass.
+func reorder(cursors []*wandCursor) []*wandCursor {
+	for i := 1; i < len(cursors); i++ {
+		c := cursors[i]
+		j := i
+		for j > 0 && before(c, cursors[j-1]) {
+			cursors[j] = cursors[j-1]
+			j--
 		}
-		return cmp.Compare(a.doc, b.doc)
-	})
+		cursors[j] = c
+	}
 	for len(cursors) > 0 && cursors[len(cursors)-1].doc == NoMoreDocs {
 		cursors = cursors[:len(cursors)-1]
 	}
 	return cursors
 }
 
-func findPivot(cursors []wandCursor, top *TopK) int {
+func before(a, b *wandCursor) bool {
+	if a.doc != b.doc {
+		return a.doc < b.doc
+	}
+	return a.rank < b.rank
+}
+
+func findPivot(cursors []*wandCursor, top *TopK) int {
 	threshold, full := top.Threshold()
 	var bound float64
 	for i := range cursors {
@@ -111,11 +121,11 @@ func findPivot(cursors []wandCursor, top *TopK) int {
 	return -1
 }
 
-func scoreDoc(ix Index, bm25 scoring.BM25, cursors []wandCursor, doc uint32) float64 {
+func scoreDoc(ix Index, bm25 scoring.BM25, cursors []*wandCursor, doc uint32) float64 {
 	var score float64
 	// Equal doc IDs are ordered by rank, matching Exhaustive's summation order.
 	for i := range cursors {
-		c := &cursors[i]
+		c := cursors[i]
 		if c.doc != doc {
 			break
 		}
@@ -124,10 +134,10 @@ func scoreDoc(ix Index, bm25 scoring.BM25, cursors []wandCursor, doc uint32) flo
 	return score
 }
 
-func advanceCandidate(cursors []wandCursor, pivotDoc uint32) *wandCursor {
-	best := &cursors[0]
+func advanceCandidate(cursors []*wandCursor, pivotDoc uint32) *wandCursor {
+	best := cursors[0]
 	for i := range cursors {
-		c := &cursors[i]
+		c := cursors[i]
 		if c.doc == pivotDoc {
 			break
 		}
@@ -138,11 +148,11 @@ func advanceCandidate(cursors []wandCursor, pivotDoc uint32) *wandCursor {
 	return best
 }
 
-func wandStep(ix Index, bm25 scoring.BM25, cursors []wandCursor, pivotDoc uint32, top *TopK) error {
+func wandStep(ix Index, bm25 scoring.BM25, cursors []*wandCursor, pivotDoc uint32, top *TopK) error {
 	if cursors[0].doc == pivotDoc {
 		top.Offer(Result{DocID: pivotDoc, Score: scoreDoc(ix, bm25, cursors, pivotDoc)})
 		for i := range cursors {
-			c := &cursors[i]
+			c := cursors[i]
 			if c.doc != pivotDoc {
 				break
 			}

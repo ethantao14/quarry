@@ -122,9 +122,8 @@ func (c *diskCursor) Advance(target uint32) error {
 	if target <= c.DocID() {
 		return nil
 	}
-	block := sort.Search(len(c.skip)/skipEntrySize, func(i int) bool {
-		return c.skipEntry(i).lastDocID >= target
-	})
+	// Blocks before the current one end before the current doc, so before target.
+	block := c.firstBlockFrom(c.block, target)
 	if block == len(c.skip)/skipEntrySize {
 		c.position = len(c.list)
 		c.shallow = block
@@ -146,8 +145,18 @@ func (c *diskCursor) DocFreq() int { return int(c.entry.docFreq) }
 func (c *diskCursor) MaxScore() float32 { return c.entry.maxScore }
 
 func (c *diskCursor) ShallowAdvance(target uint32) {
-	c.shallow += sort.Search(len(c.skip)/skipEntrySize-c.shallow, func(i int) bool {
-		return c.skipEntry(c.shallow+i).lastDocID >= target
+	c.shallow = c.firstBlockFrom(c.shallow, target)
+}
+
+// firstBlockFrom returns the first block at or after from whose last doc is at least
+// target, or the block count. Most targets fall in block from, so it is checked first.
+func (c *diskCursor) firstBlockFrom(from int, target uint32) int {
+	count := len(c.skip) / skipEntrySize
+	if from == count || c.skipEntry(from).lastDocID >= target {
+		return from
+	}
+	return from + 1 + sort.Search(count-from-1, func(i int) bool {
+		return c.skipEntry(from+1+i).lastDocID >= target
 	})
 }
 
