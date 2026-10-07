@@ -153,10 +153,10 @@
    order, so later docs must strictly beat the threshold because ties favor lower IDs. Bounds
    rounded upward and a conservative 1e-9 comparison margin protect against floating point
    summation differences. The margin can cause extra work, but cannot remove a winner.
-4. **Pruning has overhead.** At k=1000 the heap takes longer to fill and its threshold stays lower.
-   WAND may skip too little to repay cursor sorting, pivot selection, and repeated advances, so it
-   can be slower than exhaustive search. BMW helps when block bounds are much tighter than term
-   bounds; gains depend on the query and the distribution of scores across blocks.
+4. **Pruning has overhead.** At k=1000 the heap takes longer to fill and its threshold stays lower,
+   so little is skipped and the bookkeeping (cursor ordering, pivot search, advances) shows. The
+   first WAND was 7% slower than exhaustive at k=1000 until advances stopped searching skip data
+   from block zero. BMW's extra block checks win at k=10 but cost a little at k=1000.
 5. **Bounds belong to a scoring model.** Stored bounds use the index's BM25 parameters and corpus
    statistics. Changing k1 or b can invalidate them. WAND and BMW reject mismatched parameters;
    exhaustive search can still score with another BM25 configuration.
@@ -175,4 +175,24 @@
   same parameters, or a rebuild with the new scoring model.
 
 ### Key numbers
-KEY NUMBERS: TO BE FILLED IN
+MS MARCO dev small, 6,980 queries, search time only, warm page cache, one warm-up run discarded
+(Apple M3, 16 GB RAM, macOS). Runs of all three algorithms are byte-identical; MRR@10 0.1844 at
+k=10 and 0.1843 at k=1000.
+
+| Algorithm  | k    | mean ms | p50 ms | p95 ms | p99 ms |
+|------------|------|--------:|-------:|-------:|-------:|
+| exhaustive | 10   | 25.12   | 17.52  | 72.70  | 115.39 |
+| WAND       | 10   | 7.62    | 4.77   | 23.97  | 40.88  |
+| BMW        | 10   | 6.92    | 4.07   | 22.71  | 42.27  |
+| exhaustive | 1000 | 25.97   | 18.38  | 73.45  | 116.51 |
+| WAND       | 1000 | 18.26   | 13.04  | 50.73  | 83.38  |
+| BMW        | 1000 | 19.93   | 13.74  | 57.12  | 94.86  |
+
+Reproduce with `scripts/bench-search.sh <index> data/msmarco/queries.dev.small.tsv
+data/msmarco/qrels.dev.small.tsv`.
+
+- Format v2 on MS MARCO: 973.0 MB (was 885.3 MB, +9.9%); postings stay at 18.91 bits per posting,
+  `seg0.skip` adds 55.8 MB (12 bytes per 128-posting block), and the build took 81 s (was 73 s).
+- Searching skip data from the current block instead of block zero, plus an insertion sort over
+  cursor pointers, cut 1,000-query averages at k=1000 from 34.3 to 19.5 ms (BMW) and 28.5 to
+  19.8 ms (WAND), and BMW at k=10 from 13.0 to 7.2 ms.
