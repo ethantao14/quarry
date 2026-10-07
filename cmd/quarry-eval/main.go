@@ -7,14 +7,13 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"math"
 	"os"
 	"path/filepath"
-	"slices"
 	"sort"
 	"time"
 
 	"github.com/ethantao14/quarry/internal/analysis"
+	"github.com/ethantao14/quarry/internal/bench"
 	"github.com/ethantao14/quarry/internal/corpus"
 	"github.com/ethantao14/quarry/internal/eval"
 	"github.com/ethantao14/quarry/internal/index"
@@ -111,27 +110,10 @@ func run(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	slices.Sort(latencies)
-	var mean float64
-	for _, latency := range latencies {
-		mean += float64(latency) / float64(time.Millisecond)
-	}
-	if len(latencies) > 0 {
-		mean /= float64(len(latencies))
-	}
+	latencySummary := bench.Summarize(latencies, 0)
 	_, err = fmt.Fprintf(stdout, "latency_ms_mean\t%.3f\nlatency_ms_p50\t%.3f\nlatency_ms_p95\t%.3f\nlatency_ms_p99\t%.3f\n",
-		mean, float64(percentile(latencies, 50))/float64(time.Millisecond),
-		float64(percentile(latencies, 95))/float64(time.Millisecond), float64(percentile(latencies, 99))/float64(time.Millisecond))
+		latencySummary.MeanMS, latencySummary.P50MS, latencySummary.P95MS, latencySummary.P99MS)
 	return err
-}
-
-// percentile returns the nearest-rank percentile of sorted durations.
-func percentile(sorted []time.Duration, p float64) time.Duration {
-	if len(sorted) == 0 {
-		return 0
-	}
-	rank := int(math.Ceil(p / 100 * float64(len(sorted))))
-	return sorted[rank-1]
 }
 
 func loadQrels(path string) (eval.Qrels, error) {

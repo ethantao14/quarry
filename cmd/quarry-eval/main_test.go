@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/ethantao14/quarry/internal/corpus"
 )
@@ -326,31 +325,6 @@ func metricsOutput(t *testing.T, output string) string {
 		t.Fatalf("unordered percentiles: %v", values)
 	}
 	return metrics
-}
-
-func TestPercentile(t *testing.T) {
-	for _, tt := range []struct {
-		name string
-		n    int
-		want [3]time.Duration
-	}{
-		{"empty", 0, [3]time.Duration{0, 0, 0}},
-		{"one", 1, [3]time.Duration{1, 1, 1}},
-		{"two", 2, [3]time.Duration{1, 2, 2}},
-		{"hundred", 100, [3]time.Duration{50, 95, 99}},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			durations := make([]time.Duration, tt.n)
-			for i := range durations {
-				durations[i] = time.Duration(i + 1)
-			}
-			for i, p := range []float64{50, 95, 99} {
-				if got := percentile(durations, p); got != tt.want[i] {
-					t.Errorf("percentile(n=%d, p=%g) = %v, want %v", tt.n, p, got, tt.want[i])
-				}
-			}
-		})
-	}
 }
 
 func TestRunAlgorithms(t *testing.T) {

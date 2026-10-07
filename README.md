@@ -57,6 +57,9 @@ with skip entries and BM25 score bounds) is described in
 [docs/DESIGN.md](docs/DESIGN.md#on-disk-index-format). An index saved by an older build reports its
 format version and must be rebuilt with `quarry-index`.
 
+`quarry-bench --index <dir> --queries <path>` benchmarks search latency and throughput,
+with hardware details and configurable algorithms, result counts, and concurrent clients.
+
 ## Evaluation
 
 Both `quarry-search` and `quarry-eval` accept `--algo bmw` (the default), `--algo wand`, or
@@ -155,6 +158,24 @@ To check it yourself, build trec_eval and run:
 tail -n +2 data/beir/scifact/qrels/test.tsv | awk -F'\t' '{print $1" 0 "$2" "$3}' > runs/scifact.qrels
 trec_eval -c -m ndcg_cut.10 runs/scifact.qrels runs/scifact.trec
 ```
+
+### Query latency and throughput
+
+```sh
+go build -o bin/ ./cmd/quarry-bench && ./bin/quarry-bench --index data/indexes/msmarco --queries data/msmarco/queries.dev.small.tsv
+```
+
+`quarry-bench` measures search only, excluding query analysis, and records CPU, core count,
+memory, OS, and Go version. With one client it reports single-threaded query latency; with
+multiple concurrent clients it reports throughput (QPS) and latency under load. All clients
+share one saved index. The TSV table includes mean and nearest-rank p50, p95, and p99 latency.
+
+Defaults compare `--algos exhaustive,wand,bmw`, `--k 10,1000`, and `--clients 1,2,4,8`.
+Each algorithm and k gets one single-client warm-up pass before measurement for a warm OS page
+cache. Set `--warmup 0` to skip priming, or increase it for more passes. `--limit N` selects the
+first N queries in sorted query ID order; the default, 0, uses all queries.
+
+RESULTS: TO BE FILLED IN
 
 ### MS MARCO index
 
