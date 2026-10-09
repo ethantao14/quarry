@@ -60,6 +60,53 @@ format version and must be rebuilt with `quarry-index`.
 `quarry-bench --index <dir> --queries <path>` benchmarks search latency and throughput,
 with hardware details and configurable algorithms, result counts, and concurrent clients.
 
+### Serving
+
+Serve a saved index over HTTP:
+
+```sh
+go build -o bin/quarry-serve ./cmd/quarry-serve
+./bin/quarry-serve --index data/indexes/msmarco
+curl 'http://127.0.0.1:8080/search?q=red+fish&k=10'
+```
+
+The server binds to `127.0.0.1:8080` by default. Set `--addr` to change the listen address;
+`--addr 127.0.0.1:0` chooses an available port and prints the actual address at startup.
+`GET /search` returns JSON with this shape:
+
+```json
+{
+  "query": "red fish",
+  "algo": "bmw",
+  "k": 10,
+  "took_ms": 1.234,
+  "results": [{"rank": 1, "id": "document-id", "score": 12.3456}]
+}
+```
+
+`q` is required, must contain non-whitespace text, and is limited to 1000 bytes.
+`k` defaults to 10 and must be an integer from 1 to 1000. `algo` defaults to `bmw` and
+accepts `exhaustive`, `wand`, or `bmw`. Each parameter may appear only once.
+Ranks start at 1, scores are JSON numbers without rounding, and no matches returns
+`"results": []`. `took_ms` measures analysis plus search, excluding time waiting for a slot.
+`GET /healthz` returns `{"status":"ok","documents":8841823}` with the index's document count.
+Both endpoints also accept HEAD, which returns headers without a body.
+
+Errors return `{"error":"message"}` with JSON content type: 400 for invalid parameters,
+404 for an unknown path, 405 for unsupported methods (with `Allow: GET, HEAD`),
+500 for search failures, and 503 for a busy server or request timeout. Search failures
+are logged to stderr; the response says `search failed`.
+
+`--timeout` sets the whole request time limit (default `5s`, must be positive).
+`--max-concurrent` limits active searches (default twice the CPU count, minimum 1).
+Requests wait for a search slot within their time limit. A timeout returns 503 with
+`request timed out`; a slot wait that expires may instead return `server busy`.
+A running search cannot be cancelled and keeps its slot until it finishes, even after
+its HTTP response times out. The server allows 5s to read headers, 10s to read a request,
+the request timeout plus 5s to write a response, and 60s for idle connections.
+Headers are limited to 16 KiB. SIGINT or SIGTERM starts a graceful shutdown with a 10s
+deadline; background searches finish before the index is closed.
+
 ## Evaluation
 
 Both `quarry-search` and `quarry-eval` accept `--algo bmw` (the default), `--algo wand`, or
