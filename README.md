@@ -57,6 +57,9 @@ with skip entries and BM25 score bounds) is described in
 [docs/DESIGN.md](docs/DESIGN.md#on-disk-index-format). An index saved by an older build reports its
 format version and must be rebuilt with `quarry-index`.
 
+`quarry-bench --index <dir> --queries <path>` benchmarks search latency and throughput,
+with hardware details and configurable algorithms, result counts, and concurrent clients.
+
 ## Evaluation
 
 Both `quarry-search` and `quarry-eval` accept `--algo bmw` (the default), `--algo wand`, or
@@ -155,6 +158,50 @@ To check it yourself, build trec_eval and run:
 tail -n +2 data/beir/scifact/qrels/test.tsv | awk -F'\t' '{print $1" 0 "$2" "$3}' > runs/scifact.qrels
 trec_eval -c -m ndcg_cut.10 runs/scifact.qrels runs/scifact.trec
 ```
+
+### Query latency and throughput
+
+```sh
+go build -o bin/ ./cmd/quarry-bench && ./bin/quarry-bench --index data/indexes/msmarco --queries data/msmarco/queries.dev.small.tsv
+```
+
+`quarry-bench` measures search only, excluding query analysis, and records CPU, core count,
+memory, OS, and Go version. With one client it reports single-threaded query latency; with
+multiple concurrent clients it reports throughput (QPS) and latency under load. All clients
+share one saved index. The TSV table includes mean and nearest-rank p50, p95, and p99 latency.
+
+Defaults compare `--algos exhaustive,wand,bmw`, `--k 10,1000`, and `--clients 1,2,4,8`.
+Each algorithm and k gets one single-client warm-up pass before measurement for a warm OS page
+cache. Set `--warmup 0` to skip priming, or increase it for more passes. `--limit N` selects the
+first N queries in sorted query ID order; the default, 0, uses all queries.
+
+MS MARCO dev small queries (6,980) on the full index, one warm-up pass per algorithm and k (warm
+page cache), Apple M3 (4 performance and 4 efficiency cores), 16 GiB RAM, internal SSD, macOS,
+Go 1.27.1. Single-client latency in milliseconds:
+
+| Algorithm  | k    | mean  | p50   | p95   | p99    |
+|------------|-----:|------:|------:|------:|-------:|
+| exhaustive | 10   | 26.75 | 18.61 | 77.44 | 123.07 |
+| WAND       | 10   | 7.82  | 4.83  | 24.57 | 42.98  |
+| BMW        | 10   | 7.04  | 4.10  | 23.25 | 43.18  |
+| exhaustive | 1000 | 28.24 | 19.81 | 79.92 | 126.60 |
+| WAND       | 1000 | 18.10 | 12.82 | 50.19 | 82.53  |
+| BMW        | 1000 | 19.46 | 13.51 | 55.65 | 93.29  |
+
+Throughput (queries per second) with N concurrent clients sharing one index:
+
+| Algorithm  | k    | 1     | 2     | 4     | 8     |
+|------------|-----:|------:|------:|------:|------:|
+| exhaustive | 10   | 37.4  | 71.4  | 117.0 | 176.3 |
+| WAND       | 10   | 127.9 | 255.0 | 388.5 | 452.9 |
+| BMW        | 10   | 142.0 | 283.1 | 479.6 | 684.5 |
+| exhaustive | 1000 | 35.4  | 68.5  | 119.2 | 151.7 |
+| WAND       | 1000 | 55.2  | 105.4 | 190.7 | 242.1 |
+| BMW        | 1000 | 51.4  | 101.7 | 170.0 | 223.2 |
+
+Throughput scales almost linearly to 2 clients and then flattens: 4 of the 8 cores are efficiency
+cores, and per-query latency rises under load (BMW at k=10 and 8 clients: p50 6.50 ms, p99 76.26 ms).
+All results are identical across algorithms (checked by `scripts/bench-search.sh`).
 
 ### MS MARCO index
 

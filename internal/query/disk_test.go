@@ -5,6 +5,7 @@ import (
 	"math/rand/v2"
 	"path/filepath"
 	"slices"
+	"sync"
 	"testing"
 
 	"github.com/ethantao14/quarry/internal/index"
@@ -64,4 +65,75 @@ func TestDiskMatchesMemory(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestConcurrentSearch(t *testing.T) {
+	random := rand.New(rand.NewPCG(42, 7))
+	vocabulary := []string{"red", "blue", "green", "fish", "bird", "car", "tree", "water"}
+	memory := index.New()
+	for doc := range 400 {
+		terms := make([]string, random.IntN(30)+1)
+		for i := range terms {
+			terms[i] = vocabulary[random.IntN(len(vocabulary))]
+		}
+		memory.Add(fmt.Sprintf("doc-%d", doc), terms)
+	}
+	dir := filepath.Join(t.TempDir(), "idx")
+	if err := memory.Write(dir); err != nil {
+		t.Fatal(err)
+	}
+	disk, err := index.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := disk.Close(); err != nil {
+			t.Errorf("Close() error = %v", err)
+		}
+	})
+
+	bm25 := scoring.DefaultBM25()
+	queryVocabulary := append(slices.Clone(vocabulary), "missing")
+	type searchCase struct {
+		terms []string
+		k     int
+		want  []query.Result
+	}
+	cases := make([]searchCase, 60)
+	for i := range cases {
+		terms := make([]string, random.IntN(8))
+		for j := range terms {
+			terms[j] = queryVocabulary[random.IntN(len(queryVocabulary))]
+		}
+		k := []int{1, 10, 1000}[i%3]
+		want, err := query.Exhaustive(disk, bm25, terms, k)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cases[i] = searchCase{terms: terms, k: k, want: want}
+	}
+
+	start := make(chan struct{})
+	var workers sync.WaitGroup
+	for range 8 {
+		workers.Go(func() {
+			<-start
+			for _, tt := range cases {
+				for _, algo := range []string{"exhaustive", "wand", "bmw"} {
+					got, err := query.Search(algo, disk, bm25, tt.terms, tt.k)
+					if err != nil {
+						t.Error(err)
+						return
+					}
+					// Result holds a float64, so slices.Equal compares scores exactly.
+					if !slices.Equal(got, tt.want) {
+						t.Errorf("Search(%q, %q, %d) = %v, want %v", algo, tt.terms, tt.k, got, tt.want)
+						return
+					}
+				}
+			}
+		})
+	}
+	close(start)
+	workers.Wait()
 }
