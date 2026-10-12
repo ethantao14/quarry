@@ -1,9 +1,34 @@
 package query
 
 import (
+	"fmt"
+	"math/rand/v2"
 	"slices"
 	"testing"
 )
+
+// BenchmarkTopK measures offering 100,000 random results and collecting the best k.
+func BenchmarkTopK(b *testing.B) {
+	random := rand.New(rand.NewPCG(5, 8))
+	offered := make([]Result, 100000)
+	for i := range offered {
+		offered[i] = Result{DocID: uint32(i), Score: random.Float64() * 20}
+	}
+	for _, k := range []int{10, 1000} {
+		b.Run(fmt.Sprintf("k=%d", k), func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				top := NewTopK(k)
+				for _, result := range offered {
+					top.Offer(result)
+				}
+				if len(top.Results()) != k {
+					b.Fatal("wrong result count")
+				}
+			}
+		})
+	}
+}
 
 func TestTopK(t *testing.T) {
 	tests := []struct {
