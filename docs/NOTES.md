@@ -196,3 +196,68 @@ data/msmarco/qrels.dev.small.tsv`.
 - Searching skip data from the current block instead of block zero, plus an insertion sort over
   cursor pointers, cut 1,000-query averages at k=1000 from 34.3 to 19.5 ms (BMW) and 28.5 to
   19.8 ms (WAND), and BMW at k=10 from 13.0 to 7.2 ms.
+
+## M4: benchmarks, serving, and packaging
+
+### What was built
+- `quarry-bench`: replays a query file against a saved index with N concurrent clients sharing it,
+  after a warm-up pass, and reports mean and nearest-rank p50/p95/p99 latency plus queries per
+  second. It records the hardware (CPU, cores, memory, OS, Go version) next to the numbers.
+- `quarry-serve`: an HTTP API (`GET /search?q=&k=&algo=`, `GET /healthz`) on the standard library.
+  It validates input, returns JSON errors with the right status codes, limits concurrent searches
+  with a semaphore, puts a time limit on every request, and shuts down without unmapping the index
+  under a running search.
+- Documentation: a README summary table (relevance, latency, throughput, indexing, size,
+  compression) and DESIGN.md sections on query processing, concurrency and the page cache, serving,
+  and tradeoffs.
+
+### What to understand deeply
+1. **Why percentiles, not just the mean.** Query cost depends on postings list lengths, so latency
+   is skewed: BMW at k=10 has a 7.04 ms mean but a 4.10 ms median and a 43.18 ms p99. Users notice
+   the tail, and the mean hides it. Nearest-rank percentiles are reproducible: no interpolation.
+2. **Latency versus throughput.** One client measures how long a query takes; many clients measure
+   how many the machine finishes per second. Throughput rose 4.8x from 1 to 8 clients, but each
+   query got slower (p99 43 to 76 ms) once the efficiency cores and shared caches joined in.
+3. **Warm versus cold cache.** With mmap, a benchmark's first pass mostly measures disk reads.
+   quarry-bench warms the cache first and says so; a cold-cache number would be a different, also
+   valid, benchmark.
+4. **Load shedding with a semaphore.** A buffered channel of N slots bounds concurrent searches.
+   Waiting is limited by the request's deadline, after which the server answers 503 instead of
+   queueing forever. Since a search cannot be cancelled, it keeps its slot after a timeout, so work
+   in flight stays bounded even when clients retry.
+5. **Lifetimes with mmap.** Unmapping memory that a goroutine still reads crashes the process.
+   `http.Server.Shutdown` waits for responses, not for searches whose responses already timed out,
+   so the handler holds a read lock while searching and shutdown takes the write lock before
+   closing the index.
+
+### Likely interview questions
+- *"How would you make your search server robust under overload?"* Validate and cap input (query
+  length, k) so each request's cost is bounded; limit concurrent work to about the core count;
+  give every request a deadline and return 503 when it cannot get a slot in time; set server read,
+  write, and idle timeouts so slow clients cannot hold connections.
+- *"Your p99 is 10x your median. Why, and what would you do about it?"* Long queries with common
+  terms have long postings lists and loose bounds. Options: better bounds (smaller blocks), a faster
+  codec, caching frequent queries, or cancelling and early-terminating slow ones.
+- *"Why does throughput stop scaling at 8 clients on an 8-core laptop?"* Four cores are efficiency
+  cores, memory bandwidth and caches are shared, and the benchmark clients run on the same machine.
+  Throughput still rose 4.8x, which is near what 4 fast plus 4 slow cores can give.
+
+### Key numbers
+MS MARCO dev small (6,980 queries), full index, warm page cache, search time only, Apple M3 (4
+performance and 4 efficiency cores), 16 GiB RAM, internal SSD, macOS, Go 1.27.1.
+
+| Algorithm  | k    | mean ms | p99 ms | QPS, 1 client | QPS, 8 clients |
+|------------|------|--------:|-------:|--------------:|---------------:|
+| exhaustive | 10   | 26.75   | 123.07 | 37.4          | 176.3          |
+| WAND       | 10   | 7.82    | 42.98  | 127.9         | 452.9          |
+| BMW        | 10   | 7.04    | 43.18  | 142.0         | 684.5          |
+| exhaustive | 1000 | 28.24   | 126.60 | 35.4          | 151.7          |
+| WAND       | 1000 | 18.10   | 82.53  | 55.2          | 242.1          |
+| BMW        | 1000 | 19.46   | 93.29  | 51.4          | 223.2          |
+
+- Index (format 2): 973.0 MB, built in 80 s at 110,036 documents per second with a 0.78 GB peak
+  footprint in the default 1 GB budget. Postings take 18.91 bits each, 3.39x smaller than two raw
+  uint32s.
+- quarry-serve, live on MS MARCO: 500 dev queries from 8 parallel curl clients all returned 200, at
+  about 340 to 398 requests per second including curl's own startup. "what is the capital of
+  france" took 3.1 to 3.6 ms with BMW and 13.5 to 14.5 ms with exhaustive search (`took_ms`).
