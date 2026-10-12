@@ -7,6 +7,8 @@ It is evaluated on the public MS MARCO and BEIR benchmarks against published BM2
 **Status:** English text analysis, BM25 search, evaluation, and on-disk indexes (built within a
 memory budget, read back with memory mapping) work, including the full MS MARCO passage corpus.
 WAND and Block-Max WAND retrieval are implemented and return identical results to exhaustive search.
+`quarry-bench` measures latency and throughput, and `quarry-serve` serves search over HTTP. See
+[Results](#results) for the numbers and [docs/DESIGN.md](docs/DESIGN.md) for how it works.
 
 ## Requirements
 
@@ -167,6 +169,35 @@ document ID descending and averages over all judged queries, including those wit
 
 ## Results
 
+### Summary
+
+All numbers are measured on an Apple M3 (4 performance and 4 efficiency cores), 16 GiB RAM,
+internal SSD, macOS, Go 1.27.1. Latency and throughput use the full MS MARCO index with a warm page
+cache, search time only. Details, commands, and the full tables follow below.
+
+| Area | Measure | quarry | Reference |
+|------|---------|-------:|----------:|
+| Relevance | SciFact nDCG@10 | 0.6777 | Anserini 0.6789 |
+| Relevance | NFCorpus nDCG@10 | 0.3201 | Anserini 0.3218 |
+| Relevance | MS MARCO dev MRR@10 | 0.1843 | Anserini 0.1840 |
+| Relevance | MS MARCO dev R@1000 | 0.8526 | Anserini 0.8526 |
+| Latency, k=10 | exhaustive, mean / p99 | 26.75 / 123.07 ms | |
+| Latency, k=10 | WAND, mean / p99 | 7.82 / 42.98 ms | 3.4x faster mean |
+| Latency, k=10 | Block-Max WAND, mean / p99 | 7.04 / 43.18 ms | 3.8x faster mean |
+| Latency, k=1000 | exhaustive, mean / p99 | 28.24 / 126.60 ms | |
+| Latency, k=1000 | WAND, mean / p99 | 18.10 / 82.53 ms | 1.6x faster mean |
+| Latency, k=1000 | Block-Max WAND, mean / p99 | 19.46 / 93.29 ms | 1.5x faster mean |
+| Throughput | Block-Max WAND, k=10, 1 / 8 clients | 142.0 / 684.5 QPS | exhaustive 37.4 / 176.3 QPS |
+| Indexing | MS MARCO, 8,841,823 passages | 80 s, 110,036 docs/s | 8 workers, 0.78 GB peak in a 1 GB budget |
+| Index size | MS MARCO, all files | 973.0 MB | postings file 629.2 MB |
+| Compression | postings, bits per posting | 18.91 | 64 raw (two uint32s): 3.39x smaller |
+
+Relevance uses BM25 (k1=0.9, b=0.4) and 1000 results per query. All three algorithms return
+byte-identical runs. The compression ratio compares the postings file with 8 bytes per posting
+(266,247,718 postings); counting the 55.8 MB of skip entries too, it is 3.11x.
+
+### Relevance
+
 BM25 (k1=0.9, b=0.4), title and text indexed as one field, test split, 1000 results per query.
 Baselines are Anserini's published
 [BM25 flat regressions](https://github.com/castorini/anserini/tree/master/src/main/resources/reproduce/from-document-collection/configs).
@@ -260,17 +291,17 @@ budget, 8 workers) on an Apple M3 (4 performance and 4 efficiency cores, 16 GB R
 | Documents | 8,841,823 |
 | Distinct terms | 2,660,824 |
 | Postings | 266,247,718 |
-| Build time | 83 s (about 106,000 documents per second, 11 temporary segments) |
-| Index size | 885 MB (postings file 629 MB) |
+| Build time | 80 s (110,036 documents per second, 11 temporary segments) |
+| Index size | 973.0 MB: postings 629.2 MB, dictionary 121.1 MB, external IDs 131.5 MB, skip entries 55.8 MB, lengths 35.4 MB |
 | Bits per posting | 18.91 (document ID gap and term frequency, both varints) |
-| Peak memory | 0.79 GB footprint (1.5 GB resident, see below) within the 1 GB budget |
-| Evaluation, 6,980 queries | 193 s with exhaustive search (about 28 ms per query) |
+| Peak memory | 0.78 GB footprint (1.75 GB resident, see below) within the 1 GB budget |
 
 Memory is the peak physical footprint reported by `/usr/bin/time -l` on macOS, the figure Activity
 Monitor shows. macOS keeps counting memory that Go has already returned in the resident set size
 until it needs the pages back, so RSS overstates use there.
 
-Peak footprint by budget on MS MARCO (same machine; the index is byte-identical in every case):
+Peak footprint by budget on MS MARCO (same machine; the index is byte-identical in every case).
+These were measured with index format 1, before skip entries were added:
 
 | `--mem-budget` | Before budget-aware builds | Now | Build time now | Segments now |
 |---------------:|---------------------------:|----:|---------------:|-------------:|

@@ -100,6 +100,21 @@ seg0.lens       "QLEN" v2 | docCount u32 | docCount x u32 document lengths
 seg0.ids        "QIDS" v2 | docCount u32 | (docCount + 1) x u64 offsets | external ID bytes
 ```
 
+How a lookup uses the files, for one term with 300 postings (3 blocks):
+
+```text
+seg0.dict  binary search by term
+   row: docFreq=300  maxScore  postingsOffset ---------------+   skipOffset --+
+                                                              |                |
+seg0.skip                                                     |                v
+   [lastDoc  offset=0    blockMax] [lastDoc  offset=a  blockMax] [lastDoc  offset=b  blockMax]
+                 |                               |                           |
+seg0.post        v                               v                           v
+   ... | block 0: 128 (gap, tf) varints | block 1: 128 varints | block 2: 44 varints | ...
+                                                                       (offsets count from postingsOffset)
+seg0.lens  doc ID -> length (BM25)        seg0.ids  doc ID -> external ID (results)
+```
+
 Choices and tradeoffs:
 
 - **Fixed-width dictionary entries, sorted by term.** Finding a term is a binary search over equal-sized
@@ -165,6 +180,13 @@ documents in memory, and when an estimate of the chunk's memory reaches `--mem-b
 chunk as a temporary segment (`tmp-seg0`, `tmp-seg1`, ... inside the output directory) and starts a new
 chunk. At the end, a k-way merge combines the segments into the final single-segment index, and the
 temporary segments are deleted. If everything fits in the budget, the index is written directly.
+
+Why SPIMI rather than sort-based indexing (BSBI): BSBI maps every term to a global integer ID, writes
+(termID, docID, tf) triples, and sorts them, so it must keep the whole term-to-ID map in memory and
+sort far more records than there are postings lists. SPIMI appends postings straight to each term's
+list in a per-chunk hash map, needs no global term IDs, and sorts only each chunk's terms once at
+flush. The cost is that a chunk's memory depends on its vocabulary, which is why the budget is an
+estimate (below) rather than a fixed record count.
 
 - **Doc IDs need no remapping.** Documents get IDs in input order, and each chunk holds a contiguous
   range. A segment stores IDs from 0, and the merge adds the segment's starting ID. Because ranges never
@@ -235,4 +257,179 @@ memory budget would be split across shards. With the pipeline, decoding and addi
 sequential (about 2.3 s of the 10.5 s sequential build), which limits the speedup to about 4.4x; 8
 workers measured 4.2x (README, Indexing speed). Sharding is worth revisiting if adding postings
 becomes the bottleneck.
+
+## Query processing
+
+A query is analyzed like a document, then repeated terms are merged into one term with a count
+(Anserini boosts a repeated term the same way). Queries are disjunctive (OR): a document matching
+any term is a candidate. All three algorithms in `internal/query` share one interface,
+`Search(algo, index, bm25, terms, k)`, and must return exactly the same results.
+
+### Top-k heap and tie-breaking
+
+`TopK` is a min-heap of at most k results, with the worst kept result at the root. A new result
+replaces the root only if it ranks strictly better, so each candidate costs O(log k) and memory is
+O(k) no matter how many documents match. "Better" means a higher score, then a lower doc ID, which
+makes every ranking deterministic. `Threshold` returns the root's score only once the heap is full;
+until then nothing can be pruned. At the end the heap is copied and sorted.
+
+Every algorithm visits documents in increasing doc ID order. A later document with a score equal to
+the threshold therefore loses the tie, so pruning may skip anything whose bound does not strictly
+exceed the threshold.
+
+### Exhaustive document-at-a-time
+
+The reference algorithm. It opens one cursor per query term, then repeatedly takes the smallest
+current doc ID across cursors, adds the BM25 contribution of every cursor on that document, offers
+the sum to the heap, and moves those cursors with `Next`. Every matching document is scored, so its
+cost grows with the total length of the query's postings lists.
+
+### WAND
+
+WAND (Broder et al., 2003) uses each term's stored `maxScore`, times its query count, as an upper
+bound on what the term can add to any document. Each step:
+
+1. Sort cursors by current doc ID (ties by term order). An insertion sort over pointers is used,
+   because only a few cursors move per step.
+2. **Find the pivot:** add up bounds from the first cursor on, and stop at the first cursor where the
+   running sum could beat the threshold. That cursor's doc ID is the pivot. If no prefix can beat
+   it, no remaining document can enter the heap, and the search ends.
+3. If the first cursor is already on the pivot, every cursor before the pivot is too: score the
+   pivot document fully and move the cursors on it with `Next`.
+4. Otherwise, move one cursor before the pivot (the one with the largest bound) straight to the
+   pivot with `Advance`, which binary-searches the skip entries and decodes one block.
+
+Why it is safe: a document before the pivot can only contain terms from cursors before the pivot
+(the others are already past it), and their bounds add up to no more than the threshold.
+
+### Block-Max WAND
+
+Per-term bounds are loose: one very short document with a high term frequency sets `maxScore` for
+the whole list. Block-Max WAND (Ding and Suel, 2011) also checks the per-block bounds from the skip
+file. After WAND picks the pivot, it extends the prefix to every cursor on the pivot document, and:
+
+1. **Shallow advance** each prefix cursor to the block containing the pivot. This moves only a
+   block pointer over skip entries; no postings are decoded and the cursor's position does not move.
+2. Sum the block bounds of those blocks. Also compute `next`: the earliest end of those blocks plus
+   one, capped at the doc ID of the first cursor outside the prefix.
+3. If the block bound cannot beat the threshold, no document in `[pivot, next)` can win: only
+   prefix terms can occur there, each within its current block. Move one prefix cursor (the largest
+   bound) to `next` and repeat, without scoring anything.
+4. Otherwise, continue exactly like WAND step 3 or 4.
+
+### Why the results are exact
+
+Pruning only ever skips documents whose upper bound cannot strictly beat the k-th score, so the top
+k cannot change. Three details make that true in floating point, not just on paper:
+
+- **Bounds are rounded up** to float32 when the index is built, from the same float64 formula
+  queries use, so a stored bound is never below a real score.
+- **Scores are summed in one order.** Every algorithm adds term contributions in sorted term order,
+  so a document gets bit-identical float64 scores from all three.
+- **A 1e-9 relative margin** on every bound comparison covers summing bounds in a different order
+  than scores. It can only cause extra scoring, never a skip.
+
+Bounds are only valid for the BM25 parameters used to build them, so WAND and BMW refuse a query
+whose k1 or b differ from the index's manifest; exhaustive search accepts any. Randomized tests
+compare all three on random corpora (in memory and on disk), and the MS MARCO run files of all
+three algorithms are byte-identical.
+
+### What pruning costs
+
+At k=10 the threshold rises fast and most documents are skipped: on MS MARCO, BMW's mean latency
+is 7.04 ms against 26.75 ms for exhaustive search. At k=1000 the heap fills slowly and the
+threshold stays low, so far less is skipped and the per-step bookkeeping (sorting cursors, finding
+the pivot, checking blocks) shows: WAND takes 18.10 ms and BMW 19.46 ms. BMW's extra block checks
+pay off only when they let it skip. BMW is the default because short result lists (k=10) are the
+common case for interactive search.
+
+## Concurrent queries and the page cache
+
+The saved index is read-only and shared by every query. Each query opens its own cursors, and each
+disk cursor decodes into its own 128-posting buffer, so the search path takes no locks and only
+small allocations reach the Go heap. Queries scale with cores until the hardware runs out: on the
+Apple M3 (4 performance and 4 efficiency cores), BMW at k=10 went from 142.0 queries per second
+with one client to 283.1 with 2, 479.6 with 4, and 684.5 with 8 (4.8x). Beyond 4 clients, queries
+also run on the slower efficiency cores, and per-query p99 latency rose from 43.18 to 76.26 ms.
+
+The page cache decides what those numbers mean:
+
+- **Warm runs measure CPU, not disk.** The 973 MB MS MARCO index fits easily in 16 GB of RAM.
+  `quarry-bench` runs one warm-up pass per algorithm and k first, so measured queries find their
+  pages already cached, and the results say so.
+- **Cold queries pay for page faults.** A page touched for the first time waits for a disk read;
+  pruning helps here too, since a skipped block is never read. Cold-cache latency was not measured.
+- **Mapped pages are outside Go's memory accounting.** They count toward the process's resident
+  memory but not the Go heap or `GOMEMLIMIT`. They are clean, file-backed pages, so under memory
+  pressure the OS drops them without swapping and rereads them on the next touch.
+- **Opening reads the whole index once** to verify checksums, which also warms the cache. In
+  `quarry-serve` this happens at startup, not on the first request.
+- **An index larger than RAM** would make hot terms' blocks compete for cache space, and latency
+  would then depend on query locality and disk speed. That case was not tested.
+
+## Serving
+
+`quarry-serve` opens one index at startup and serves `GET /search` and `GET /healthz` with Go's
+standard `net/http`. Each request goes through these layers, outermost first:
+
+1. **Server timeouts** stop slow or idle clients from holding connections: 5 s to send headers
+   (against slow-header attacks), 10 s for the whole request, the request timeout plus 5 s to write
+   a response, 60 s for idle keep-alive connections, and 16 KiB of headers.
+2. **`http.TimeoutHandler`** gives each request `--timeout` (default 5 s) in total. When it fires,
+   the client gets a 503 with a JSON body; the content type is set outside the handler so even the
+   timeout response is JSON.
+3. **Validation** rejects bad input with 400 before any work: `q` required, non-blank, at most 1000
+   bytes; `k` from 1 to 1000; `algo` one of the three; each parameter at most once. Limiting query
+   length and k bounds the cost of any single query.
+4. **A semaphore** (a buffered channel of `--max-concurrent` slots, default twice the CPU count)
+   limits searches running at once. A request waits for a slot only while its time limit allows,
+   then gets 503 `server busy`. More searches than cores would only share CPU time and raise every
+   query's latency.
+5. **The search** runs with the slot held. `took_ms` covers analysis and search, not the wait.
+
+**Search cannot be cancelled.** The query loops take no context, so a search keeps running after its
+request times out. It also keeps its slot until it finishes, so the total work in flight never
+exceeds `--max-concurrent` searches, even when clients give up and retry. The cost is that under
+overload, a slot can be busy with a search nobody is waiting for. Checking for cancellation inside
+the loops (say, once per decoded block) would fix that; it was left out because the slowest
+measured query (exhaustive, p99 about 127 ms) is far below the 5 s limit.
+
+**Shutdown waits for searches before unmapping.** On SIGINT or SIGTERM, `http.Server.Shutdown`
+stops accepting connections and waits up to 10 s for responses. That is not enough on its own: a
+search whose response already timed out is still running in the background, and unmapping the
+index under it would crash the process, not return an error. Each handler holds a read lock while
+it runs; shutdown takes the write lock, which waits for all of them, and only then closes the
+index. Requests that arrive after that get 503.
+
+Other choices: the server binds to `127.0.0.1` by default because it has no authentication; search
+failures are logged to stderr and the client sees only `search failed`; and `HEAD` is accepted on
+both endpoints for health checkers.
+
+## Tradeoffs and what I would do next
+
+The main tradeoffs, and what each one bought:
+
+| Choice | Bought | Gave up |
+|--------|--------|---------|
+| Varint gaps inside 128-posting blocks | Simple, fuzzable codec; format 1's postings bytes unchanged | Smaller, faster bit-packed blocks (Lucene's choice) |
+| Fixed-width sorted dictionary | Binary search straight on the mapping, nothing built at open | Space: an FST or front coding would shrink the 121 MB dictionary |
+| One merged segment, immutable | Simple reads, global statistics are exact | Incremental updates: adding documents means rebuilding |
+| Exact pruning | Results identical to exhaustive search, testable bit for bit | Approximate methods that skip more aggressively |
+| Exact lengths, float64 scores | Simpler, more precise scoring | Byte-for-byte agreement with Lucene (nDCG@10 0.6777 vs 0.6789 on SciFact) |
+| mmap on macOS and Linux | Small heap, fast open, shared page cache | Windows support, and control over what stays in memory |
+| Uncancellable search | Simpler, faster inner loops | Freeing a slot as soon as a request times out |
+
+What I would do next, in order of expected value:
+
+1. **A bit-packed block codec** (PForDelta style). Decoding varints takes about 5.5 ns per posting
+   and the postings are 629 MB; packing each block at a fixed bit width decodes with no branches
+   per value and would shrink both the index and query time.
+2. **Cancellable search**, checking the request context once per block, so timed-out requests free
+   their slot.
+3. **Incremental indexing** with a tiered merge policy: write new documents as small segments,
+   search across segments, and merge them in the background, as Lucene does.
+4. **Sharding** across processes with a scatter-gather frontend that merges each shard's top k.
+   BM25 would need collection-wide statistics shared between shards to keep scores identical.
+5. **Phrase queries**, which need term positions in the postings.
+6. **Measuring cold-cache and Linux behavior**, which the current numbers do not cover.
 
