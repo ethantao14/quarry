@@ -81,7 +81,8 @@ differently.
 
 ## On-disk index format
 
-`quarry-index` saves an index as a directory of six files (format version 2). An index from another
+`quarry-index` saves an index as a directory of six files (format version 2), or eight with
+`--store-text`. An index from another
 version fails to open with a message to rebuild it. All integers are
 little-endian. Each binary file starts with an 8-byte header, a 4-byte magic string and the format
 version, so a file from another format or version is rejected with a clear error.
@@ -98,6 +99,8 @@ seg0.skip       "QSKP" v2 | for each term, one 12-byte entry per block of 128 po
                 entry: lastDocID u32, offset u32 (from the term's first posting), blockMax f32
 seg0.lens       "QLEN" v2 | docCount u32 | docCount x u32 document lengths
 seg0.ids        "QIDS" v2 | docCount u32 | (docCount + 1) x u64 offsets | external ID bytes
+seg0.text       "QTXT" v2 | each document's text, in doc ID order          (only with --store-text)
+seg0.toff       "QTOF" v2 | (docCount + 1) x u64 offsets into the text     (only with --store-text)
 ```
 
 How a lookup uses the files, for one term with 300 postings (3 blocks):
@@ -140,6 +143,14 @@ Choices and tradeoffs:
   bounds-checked, so a corrupt or partly written index fails at open instead of returning wrong results.
   The manifest is written last, so an interrupted build has no manifest and is rejected.
 - **No overwrites.** `quarry-index` refuses to write into an existing directory.
+- **Stored text is optional and separate.** Search never reads it, so it is off by default and the
+  other files are byte-identical with or without it. Documents arrive at the builder in doc ID
+  order, so their text is appended to `seg0.text` (and each end offset to `seg0.toff`) as it is
+  added: no text stays in memory, and it skips the chunks and the merge entirely. The offsets go in
+  their own file because their count is only known at the end. An index with text has seven binary
+  files in its manifest; a build that predates stored text rejects it, because it expects five.
+  The cost is disk and startup: MS MARCO's text is 2.98 GB, and checksumming it on open makes
+  `quarry-serve` take about 7 s to start.
 
 ### Memory-mapped reads
 

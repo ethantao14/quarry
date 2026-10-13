@@ -1,6 +1,7 @@
 package index
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -16,13 +17,15 @@ type Builder struct {
 	chunk       *Index
 	docCount    uint32
 	segments    []uint32
+	text        *textWriter // nil unless storing document text
 	finished    bool
 	failure     error
 }
 
 // NewBuilder creates a new index directory with a positive in-memory chunk budget in bytes.
-// Callers decide how the chunk budget relates to process memory.
-func NewBuilder(dir string, chunkBudget int64) (*Builder, error) {
+// Callers decide how the chunk budget relates to process memory. With storeText, each
+// document's text is streamed to disk as it is added, outside the chunk budget.
+func NewBuilder(dir string, chunkBudget int64, storeText bool) (*Builder, error) {
 	if chunkBudget <= 0 {
 		return nil, fmt.Errorf("chunk budget must be positive")
 	}
@@ -30,11 +33,18 @@ func NewBuilder(dir string, chunkBudget int64) (*Builder, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Builder{dir: dir, chunkBudget: chunkBudget, chunk: New()}, nil
+	b := &Builder{dir: dir, chunkBudget: chunkBudget, chunk: New()}
+	if storeText {
+		if b.text, err = newTextWriter(dir); err != nil {
+			return nil, errors.Join(err, os.RemoveAll(dir))
+		}
+	}
+	return b, nil
 }
 
 // Add indexes a document in input order, flushing the chunk when it reaches the budget.
-func (b *Builder) Add(externalID string, terms []string) error {
+// text is stored only if the builder was created with storeText.
+func (b *Builder) Add(externalID, text string, terms []string) error {
 	if b.finished {
 		return fmt.Errorf("builder is finished")
 	}
@@ -43,6 +53,12 @@ func (b *Builder) Add(externalID string, terms []string) error {
 	}
 	if b.docCount == math.MaxUint32 {
 		return fmt.Errorf("index counts exceed format limits")
+	}
+	if b.text != nil {
+		if err := b.text.add(text); err != nil {
+			b.failure = err
+			return err
+		}
 	}
 	b.memory += b.estimateDocument(externalID, terms)
 	b.chunk.Add(externalID, terms)
@@ -91,7 +107,7 @@ func (b *Builder) flush() error {
 	if err != nil {
 		return err
 	}
-	if err := b.chunk.writeSegment(dir, temporary); err != nil {
+	if err := b.chunk.writeSegment(dir, temporary, nil); err != nil {
 		return err
 	}
 	b.segments = append(b.segments, uint32(b.chunk.DocCount()))
@@ -110,8 +126,15 @@ func (b *Builder) Finish() error {
 	if b.failure != nil {
 		return b.failure
 	}
+	var textFiles map[string]fileInfo
+	if b.text != nil {
+		var err error
+		if textFiles, err = b.text.finish(); err != nil {
+			return err
+		}
+	}
 	if len(b.segments) == 0 {
-		return b.chunk.writeSegment(b.dir, durable)
+		return b.chunk.writeSegment(b.dir, durable, textFiles)
 	}
 	if b.chunk.DocCount() != 0 {
 		if err := b.flush(); err != nil {
@@ -122,7 +145,7 @@ func (b *Builder) Finish() error {
 	for i := range dirs {
 		dirs[i] = b.segmentDir(i)
 	}
-	if err := mergeSegments(b.dir, dirs, b.segments); err != nil {
+	if err := mergeSegments(b.dir, dirs, b.segments, textFiles); err != nil {
 		return err
 	}
 	for _, dir := range dirs {
@@ -137,6 +160,9 @@ func (b *Builder) Finish() error {
 // including any temporary segments. Use it when indexing fails.
 func (b *Builder) Abort() error {
 	b.finished = true
+	if b.text != nil {
+		b.text.abort()
+	}
 	return os.RemoveAll(b.dir)
 }
 

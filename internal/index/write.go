@@ -28,7 +28,7 @@ func (ix *Index) Write(dir string) error {
 	if err != nil {
 		return err
 	}
-	return ix.writeSegment(dir, durable)
+	return ix.writeSegment(dir, durable, nil)
 }
 
 // Whether files are synced to disk before closing. Temporary merge inputs skip
@@ -80,11 +80,13 @@ func splitLastElement(dir string) (parent, name string) {
 	return ".", dir
 }
 
-func (ix *Index) writeSegment(dir string, sync bool) error {
+// writeSegment writes the index into dir; extraFiles are already written files to list in the manifest.
+func (ix *Index) writeSegment(dir string, sync bool, extraFiles map[string]fileInfo) error {
 	writer, err := newSegmentWriter(dir, sync, scoringStats{uint32(ix.DocCount()), ix.AvgDocLen(), ix.DocLen})
 	if err != nil {
 		return err
 	}
+	writer.extraFiles = extraFiles
 	defer writer.abort()
 	terms := make([]string, 0, len(ix.postings))
 	for term := range ix.postings {
@@ -114,6 +116,8 @@ type segmentWriter struct {
 	entries  []dictEntry
 	termBlob []byte
 	previous string
+	// extraFiles are written outside the segment (stored text) but listed in its manifest.
+	extraFiles map[string]fileInfo
 }
 
 func newSegmentWriter(dir string, sync bool, stats scoringStats) (*segmentWriter, error) {
@@ -224,6 +228,9 @@ func (s *segmentWriter) finish(docCount uint32, docLen func(uint32) uint32, exte
 		BM25K1:        &bm25.K1,
 		BM25B:         &bm25.B,
 		Files:         map[string]fileInfo{postName: info, skipName: skipInfo},
+	}
+	for name, info := range s.extraFiles {
+		m.Files[name] = info
 	}
 	files := []struct {
 		name  string

@@ -55,12 +55,12 @@ func checkBuilderBudgets(t *testing.T, docs []builderDocument) {
 	for _, budget := range []int64{1, 64, 512, 4096, 1 << 40} {
 		t.Run(fmt.Sprintf("budget=%d", budget), func(t *testing.T) {
 			dir := filepath.Join(t.TempDir(), "idx")
-			builder, err := NewBuilder(dir, budget)
+			builder, err := NewBuilder(dir, budget, false)
 			if err != nil {
 				t.Fatal(err)
 			}
 			for _, doc := range docs {
-				if err := builder.Add(doc.id, doc.terms); err != nil {
+				if err := builder.Add(doc.id, "", doc.terms); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -147,7 +147,7 @@ func TestNewBuilder(t *testing.T) {
 			if !tt.existing {
 				dir = filepath.Join(dir, "nested", "idx") + tt.suffix
 			}
-			builder, err := NewBuilder(dir, tt.budget)
+			builder, err := NewBuilder(dir, tt.budget, false)
 			if tt.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 					t.Fatalf("NewBuilder() error = %v, want %q", err, tt.wantErr)
@@ -174,11 +174,11 @@ func TestNewBuilder(t *testing.T) {
 func TestBuilderFinished(t *testing.T) {
 	for _, budget := range []int64{1, 1 << 40} {
 		t.Run(fmt.Sprint(budget), func(t *testing.T) {
-			builder, err := NewBuilder(filepath.Join(t.TempDir(), "idx"), budget)
+			builder, err := NewBuilder(filepath.Join(t.TempDir(), "idx"), budget, false)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := builder.Add("doc", []string{"a"}); err != nil {
+			if err := builder.Add("doc", "", []string{"a"}); err != nil {
 				t.Fatal(err)
 			}
 			if err := builder.Finish(); err != nil {
@@ -188,7 +188,7 @@ func TestBuilderFinished(t *testing.T) {
 				name string
 				run  func() error
 			}{
-				{"Add", func() error { return builder.Add("late", nil) }},
+				{"Add", func() error { return builder.Add("late", "", nil) }},
 				{"Finish", builder.Finish},
 			} {
 				t.Run(operation.name, func(t *testing.T) {
@@ -203,12 +203,12 @@ func TestBuilderFinished(t *testing.T) {
 
 // TestBuilderDocCountLimit checks the global limit before mutating the chunk.
 func TestBuilderDocCountLimit(t *testing.T) {
-	builder, err := NewBuilder(filepath.Join(t.TempDir(), "idx"), 1)
+	builder, err := NewBuilder(filepath.Join(t.TempDir(), "idx"), 1, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	builder.docCount = math.MaxUint32
-	if err := builder.Add("overflow", nil); err == nil || err.Error() != "index counts exceed format limits" {
+	if err := builder.Add("overflow", "", nil); err == nil || err.Error() != "index counts exceed format limits" {
 		t.Fatalf("Add() error = %v", err)
 	}
 	if builder.chunk.DocCount() != 0 || builder.Segments() != 0 {
@@ -230,18 +230,18 @@ func TestBuilderMemoryEstimate(t *testing.T) {
 
 // TestBuilderFlushFailure prevents further writes after a failed chunk flush.
 func TestBuilderFlushFailure(t *testing.T) {
-	builder, err := NewBuilder(filepath.Join(t.TempDir(), "idx"), 1)
+	builder, err := NewBuilder(filepath.Join(t.TempDir(), "idx"), 1, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Mkdir(builder.segmentDir(0), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	failure := builder.Add("first", []string{"shared"})
+	failure := builder.Add("first", "", []string{"shared"})
 	if failure == nil || !strings.Contains(failure.Error(), "already exists") {
 		t.Fatalf("Add() error = %v", failure)
 	}
-	if err := builder.Add("second", nil); err != failure {
+	if err := builder.Add("second", "", nil); err != failure {
 		t.Fatalf("second Add() error = %v, want %v", err, failure)
 	}
 	if err := builder.Finish(); err != failure {
@@ -266,12 +266,12 @@ func TestBuilderFlushesAtBudget(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(fmt.Sprint(tt.budget), func(t *testing.T) {
-			builder, err := NewBuilder(filepath.Join(t.TempDir(), "idx"), tt.budget)
+			builder, err := NewBuilder(filepath.Join(t.TempDir(), "idx"), tt.budget, false)
 			if err != nil {
 				t.Fatal(err)
 			}
 			for i := range 6 {
-				if err := builder.Add(fmt.Sprintf("d%d", i), []string{fmt.Sprintf("t%d", i)}); err != nil {
+				if err := builder.Add(fmt.Sprintf("d%d", i), "", []string{fmt.Sprintf("t%d", i)}); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -288,12 +288,12 @@ func TestBuilderFlushesAtBudget(t *testing.T) {
 // TestBuilderAbort removes the directory and its temporary segments, and ends the build.
 func TestBuilderAbort(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "idx")
-	builder, err := NewBuilder(dir, 1)
+	builder, err := NewBuilder(dir, 1, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, id := range []string{"a", "b"} {
-		if err := builder.Add(id, []string{"shared"}); err != nil {
+		if err := builder.Add(id, "", []string{"shared"}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -303,7 +303,7 @@ func TestBuilderAbort(t *testing.T) {
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
 		t.Errorf("Abort left %s behind: %v", dir, err)
 	}
-	if err := builder.Add("late", nil); err == nil {
+	if err := builder.Add("late", "", nil); err == nil {
 		t.Error("Add after Abort succeeded")
 	}
 }

@@ -407,12 +407,12 @@ func TestDiskPostingCount(t *testing.T) {
 			}
 			dir := filepath.Join(t.TempDir(), "idx")
 			if mode == "merged" {
-				builder, err := NewBuilder(dir, 1)
+				builder, err := NewBuilder(dir, 1, false)
 				if err != nil {
 					t.Fatal(err)
 				}
 				for _, doc := range docs {
-					if err := builder.Add(doc.id, doc.terms); err != nil {
+					if err := builder.Add(doc.id, "", doc.terms); err != nil {
 						t.Fatal(err)
 					}
 				}

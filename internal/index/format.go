@@ -21,6 +21,11 @@ const (
 	skipMagic    = "QSKP"
 	lensMagic    = "QLEN"
 	idsMagic     = "QIDS"
+	// Optional stored document text: the bytes, and docCount+1 uint64 offsets into them.
+	textName        = "seg0.text"
+	textOffsetsName = "seg0.toff"
+	textMagic       = "QTXT"
+	textOffsetMagic = "QTOF"
 
 	// Every binary file starts with a 4-byte magic and a uint32 version.
 	headerSize = 8

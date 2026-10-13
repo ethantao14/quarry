@@ -150,6 +150,40 @@ func TestSearch(t *testing.T) {
 	}
 }
 
+func TestSearchText(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "index")
+	builder, err := index.NewBuilder(path, 1<<20, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := corpus.ReadFile("testdata/tiny.jsonl", 2, builder.Add); err != nil {
+		t.Fatal(err)
+	}
+	if err := builder.Finish(); err != nil {
+		t.Fatal(err)
+	}
+	withText, err := index.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := withText.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	var got searchResponse
+	checkJSON(t, request(testHandler(t, withText, testOptions()), http.MethodGet, "/search?q=car"), http.StatusOK, &got)
+	if len(got.Results) != 1 || got.Results[0].Text == nil || *got.Results[0].Text != "Red car\nfast wheels" {
+		t.Fatalf("results = %+v, want car with its title and text", got.Results)
+	}
+
+	_, withoutText := savedIndex(t)
+	w := request(testHandler(t, withoutText, testOptions()), http.MethodGet, "/search?q=car")
+	if strings.Contains(w.Body.String(), `"text"`) {
+		t.Errorf("body = %s, want no text field for an index without text", w.Body.String())
+	}
+}
+
 func TestValidation(t *testing.T) {
 	_, ix := savedIndex(t)
 	h := testHandler(t, ix, testOptions())

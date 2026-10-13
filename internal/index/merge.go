@@ -50,7 +50,7 @@ func (h termHeap) term(cursor segmentCursor) []byte {
 	return disk.term(disk.entry(cursor.entry))
 }
 
-func mergeSegments(dir string, dirs []string, counts []uint32) (err error) {
+func mergeSegments(dir string, dirs []string, counts []uint32, extraFiles map[string]fileInfo) (err error) {
 	disks := make([]*Disk, 0, len(dirs))
 	defer func() {
 		for _, disk := range disks {
@@ -88,6 +88,7 @@ func mergeSegments(dir string, dirs []string, counts []uint32) (err error) {
 		return err
 	}
 	defer writer.abort()
+	writer.extraFiles = extraFiles
 	terms := &termHeap{disks: disks}
 	for i, disk := range disks {
 		if disk.termCount > 0 {
