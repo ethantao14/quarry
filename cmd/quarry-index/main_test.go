@@ -430,6 +430,46 @@ func TestRunCorpusFormats(t *testing.T) {
 	}
 }
 
+func TestRunStoreText(t *testing.T) {
+	for _, format := range []struct {
+		ext   string
+		input string
+		want  []string
+	}{
+		{ext: ".jsonl", input: "{\"_id\":\"a\",\"title\":\"Red\",\"text\":\"fish fish\"}\n{\"_id\":\"b\",\"title\":\"\",\"text\":\"blue\"}\n", want: []string{"Red\nfish fish", "blue"}},
+		{ext: ".tsv", input: "a\tred fish fish\nb\tblue\tfish\nc\t\n", want: []string{"red fish fish", "blue\tfish", ""}},
+	} {
+		for _, budget := range []string{"1GB", "1"} {
+			t.Run(format.ext+"/budget="+budget, func(t *testing.T) {
+				root := t.TempDir()
+				path := filepath.Join(root, "corpus"+format.ext)
+				if err := os.WriteFile(path, []byte(format.input), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				out := filepath.Join(root, "idx")
+				var stdout, stderr bytes.Buffer
+				if err := run([]string{"--corpus", path, "--out", out, "--mem-budget", budget, "--store-text"}, &stdout, &stderr); err != nil {
+					t.Fatal(err)
+				}
+				disk, err := index.Open(out)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() {
+					if err := disk.Close(); err != nil {
+						t.Error(err)
+					}
+				})
+				for i, want := range format.want {
+					if got := disk.Text(uint32(i)); got != want {
+						t.Errorf("Text(%d) = %q, want %q", i, got, want)
+					}
+				}
+			})
+		}
+	}
+}
+
 func TestRunEmptyCorpusStats(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "corpus.tsv")
 	if err := os.WriteFile(path, nil, 0o600); err != nil {

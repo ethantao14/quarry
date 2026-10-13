@@ -41,6 +41,12 @@ temporary segments, total index size in bytes, build time in seconds, documents 
 bits per posting (postings file size divided by postings). It refuses to overwrite an existing directory, and removes its partial
 output if indexing fails.
 
+Add `--store-text` to also save each document's text (for BEIR, the title and text on separate
+lines), so `quarry-serve` can show it with each result. Search does not use it, and the rest of the
+index is byte-for-byte the same either way. On MS MARCO it adds 3.05 GB (index 4.03 GB instead of
+973 MB), the build takes 96 s instead of 80 s with peak memory still within the budget (0.81 GB of
+1 GB), and `quarry-serve` takes about 7 s to start because opening checks every byte's checksum.
+
 To index a corpus larger than memory, set `--mem-budget` (bytes, or a number with `KB`, `MB`, or
 `GB`; default `1GB`). Postings are collected in memory until they reach a third of the budget; then
 quarry writes them as a temporary segment and continues, and at the end it merges the segments into
@@ -89,7 +95,8 @@ The server binds to `127.0.0.1:8080` by default. Set `--addr` to change the list
 `q` is required, must contain non-whitespace text, and is limited to 1000 bytes.
 `k` defaults to 10 and must be an integer from 1 to 1000. `algo` defaults to `bmw` and
 accepts `exhaustive`, `wand`, or `bmw`. Each parameter may appear only once.
-Ranks start at 1, scores are JSON numbers without rounding, and no matches returns
+If the index was built with `--store-text`, each result also has a `"text"` field with the
+document's text. Ranks start at 1, scores are JSON numbers without rounding, and no matches returns
 `"results": []`. `took_ms` measures analysis plus search, excluding time waiting for a slot.
 `GET /healthz` returns `{"status":"ok","documents":8841823}` with the index's document count.
 Both endpoints also accept HEAD, which returns headers without a body.

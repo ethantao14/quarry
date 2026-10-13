@@ -10,14 +10,13 @@ import (
 
 // fuzzFiles are the files FuzzOpen may replace. Binary files get a matching
 // manifest checksum, so the fuzzer reaches the validation behind it.
-var fuzzFiles = []string{dictName, postName, skipName, lensName, idsName, manifestName}
+var fuzzFiles = []string{dictName, postName, skipName, lensName, idsName, textName, textOffsetsName, manifestName}
 
 // FuzzOpen checks that no index contents can make Open or reads panic.
 func FuzzOpen(f *testing.F) {
 	source := filepath.Join(f.TempDir(), "idx")
-	if err := smallIndex().Write(source); err != nil {
-		f.Fatal(err)
-	}
+	docs := []textDoc{{"first", "a a b", []string{"a", "a", "b"}}, {"", "", nil}, {"三", "b 猫", []string{"b", "猫"}}}
+	buildTextIndex(f, source, docs, 1<<20, true)
 	for i, name := range fuzzFiles {
 		data, err := os.ReadFile(filepath.Join(source, name))
 		if err != nil {
@@ -54,6 +53,7 @@ func readEverything(t *testing.T, disk *Disk) {
 	for doc := 0; doc < disk.DocCount(); doc++ {
 		_ = disk.DocLen(uint32(doc))
 		_ = disk.ExternalID(uint32(doc))
+		_ = disk.Text(uint32(doc))
 	}
 	for i := 0; i < disk.TermCount(); i++ {
 		term := string(disk.term(disk.entry(uint32(i))))

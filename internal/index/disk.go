@@ -26,6 +26,8 @@ type Disk struct {
 	bm25         scoring.BM25
 	lens         []byte
 	ids          []byte
+	text         []byte // nil unless the index stores document text
+	textOffsets  []byte
 	docCount     uint32
 	termCount    uint32
 	totalTerms   uint64
@@ -60,8 +62,13 @@ func Open(dir string) (*Disk, error) {
 	if m.FormatVersion != FormatVersion {
 		return nil, formatError(m.FormatVersion)
 	}
-	if len(m.Files) != 5 {
-		return nil, fmt.Errorf("%s: expected exactly five binary files", manifestName)
+	_, hasText := m.Files[textName]
+	wantFiles := 5
+	if hasText {
+		wantFiles = 7
+	}
+	if len(m.Files) != wantFiles {
+		return nil, fmt.Errorf("%s: expected five binary files, or seven with stored text", manifestName)
 	}
 	if m.BM25K1 == nil || m.BM25B == nil || !finite(*m.BM25K1) || !finite(*m.BM25B) {
 		return nil, fmt.Errorf("%s: bm25_k1 and bm25_b must be present and finite", manifestName)
@@ -74,16 +81,15 @@ func Open(dir string) (*Disk, error) {
 			_ = d.Close()
 		}
 	}()
-	files := []struct {
-		name  string
-		magic string
-		dst   *[]byte
-	}{
+	files := []mappedFile{
 		{dictName, dictMagic, &d.dict},
 		{postName, postMagic, &d.post},
 		{skipName, skipMagic, &d.skip},
 		{lensName, lensMagic, &d.lens},
 		{idsName, idsMagic, &d.ids},
+	}
+	if hasText {
+		files = append(files, mappedFile{textName, textMagic, &d.text}, mappedFile{textOffsetsName, textOffsetMagic, &d.textOffsets})
 	}
 	for _, file := range files {
 		info, ok := m.Files[file.name]
@@ -123,15 +129,25 @@ func Open(dir string) (*Disk, error) {
 	if err := d.validateIDs(); err != nil {
 		return nil, err
 	}
+	if err := d.validateText(); err != nil {
+		return nil, err
+	}
 	opened = true
 	return d, nil
+}
+
+// mappedFile is a binary index file and where Open stores its mapping.
+type mappedFile struct {
+	name  string
+	magic string
+	dst   *[]byte
 }
 
 // Close unmaps the index files. After Close, the Disk must not be used.
 // Calling Close again returns nil.
 func (d *Disk) Close() error {
 	var firstErr error
-	for _, data := range []*[]byte{&d.dict, &d.post, &d.skip, &d.lens, &d.ids} {
+	for _, data := range []*[]byte{&d.dict, &d.post, &d.skip, &d.lens, &d.ids, &d.text, &d.textOffsets} {
 		if err := unmapFile(*data); err != nil && firstErr == nil {
 			firstErr = err
 		}

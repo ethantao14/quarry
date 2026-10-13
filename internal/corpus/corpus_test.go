@@ -95,11 +95,12 @@ func TestRead(t *testing.T) {
 		name      string
 		input     string
 		wantIDs   []string
+		wantTexts []string
 		wantTerms [][]string
 		wantErr   string
 	}{
 		{name: "empty", input: " \n\t"},
-		{name: "records", input: `{"_id":"a","title":"RED","text":"Fish fish!","metadata":{}} {"_id":"b"}`, wantIDs: []string{"a", "b"}, wantTerms: [][]string{{"red", "fish", "fish"}, nil}},
+		{name: "records", input: `{"_id":"a","title":"RED","text":"Fish fish!","metadata":{}} {"_id":"b"}`, wantIDs: []string{"a", "b"}, wantTexts: []string{"RED\nFish fish!", ""}, wantTerms: [][]string{{"red", "fish", "fish"}, nil}},
 		{name: "missing id", input: `{"text":"fish"}`, wantErr: "record 1: _id is empty"},
 		{name: "empty id", input: `{"_id":""}`, wantErr: "record 1: _id is empty"},
 		{name: "malformed", input: `{"_id":"a"} {`, wantErr: "record 2:"},
@@ -109,10 +110,11 @@ func TestRead(t *testing.T) {
 		t.Run(fmt.Sprintf("workers=%d", workers), func(t *testing.T) {
 			for _, tt := range tests {
 				t.Run(tt.name, func(t *testing.T) {
-					var ids []string
+					var ids, texts []string
 					var terms [][]string
-					err := Read(strings.NewReader(tt.input), workers, func(id string, analyzed []string) error {
+					err := Read(strings.NewReader(tt.input), workers, func(id, text string, analyzed []string) error {
 						ids = append(ids, id)
+						texts = append(texts, text)
 						terms = append(terms, analyzed)
 						return nil
 					})
@@ -122,8 +124,8 @@ func TestRead(t *testing.T) {
 						}
 						return
 					}
-					if err != nil || !slices.Equal(ids, tt.wantIDs) {
-						t.Fatalf("Read() IDs = %v, error = %v", ids, err)
+					if err != nil || !slices.Equal(ids, tt.wantIDs) || !slices.Equal(texts, tt.wantTexts) {
+						t.Fatalf("Read() IDs = %v, texts = %q, error = %v", ids, texts, err)
 					}
 					for i := range terms {
 						if !slices.Equal(terms[i], tt.wantTerms[i]) {
@@ -156,7 +158,7 @@ func TestReadVisitError(t *testing.T) {
 			reader := &recordReader{}
 			want := errors.New("visitor stopped")
 			calls := 0
-			err := Read(reader, workers, func(string, []string) error {
+			err := Read(reader, workers, func(string, string, []string) error {
 				calls++
 				return want
 			})
@@ -192,7 +194,7 @@ func TestReadFile(t *testing.T) {
 						}
 					}
 					calls := 0
-					err := ReadFile(path, workers, func(string, []string) error {
+					err := ReadFile(path, workers, func(string, string, []string) error {
 						calls++
 						return tt.visitErr
 					})
@@ -264,7 +266,7 @@ func TestReadMatchesSequential(t *testing.T) {
 			for _, workers := range []int{1, 2, 3, 8, records + 5} {
 				t.Run(fmt.Sprintf("workers=%d", workers), func(t *testing.T) {
 					var got []document
-					err := Read(strings.NewReader(input.String()), workers, func(id string, terms []string) error {
+					err := Read(strings.NewReader(input.String()), workers, func(id, _ string, terms []string) error {
 						got = append(got, document{id, terms})
 						return nil
 					})
@@ -294,7 +296,7 @@ func TestReadErrorsKeepOrder(t *testing.T) {
 		t.Run(fmt.Sprintf("workers=%d", workers), func(t *testing.T) {
 			t.Run("decode", func(t *testing.T) {
 				calls := 0
-				err := Read(strings.NewReader(input.String()+"{"), workers, func(string, []string) error {
+				err := Read(strings.NewReader(input.String()+"{"), workers, func(string, string, []string) error {
 					calls++
 					return nil
 				})
@@ -305,7 +307,7 @@ func TestReadErrorsKeepOrder(t *testing.T) {
 			t.Run("visit", func(t *testing.T) {
 				want := errors.New("visitor stopped")
 				calls := 0
-				err := Read(strings.NewReader(input.String()), workers, func(string, []string) error {
+				err := Read(strings.NewReader(input.String()), workers, func(string, string, []string) error {
 					calls++
 					if calls == 37 {
 						return want
@@ -330,7 +332,7 @@ func TestReadStopsGoroutines(t *testing.T) {
 			before := runtime.NumGoroutine()
 			want := errors.New("visitor stopped")
 			calls := 0
-			err := Read(strings.NewReader(input.String()), 8, func(string, []string) error {
+			err := Read(strings.NewReader(input.String()), 8, func(string, string, []string) error {
 				calls++
 				if calls == stopAt {
 					return want
@@ -360,7 +362,7 @@ func TestReadRejectsWorkers(t *testing.T) {
 		t.Run(fmt.Sprintf("workers=%d", workers), func(t *testing.T) {
 			reader := &recordReader{}
 			calls := 0
-			err := Read(reader, workers, func(string, []string) error {
+			err := Read(reader, workers, func(string, string, []string) error {
 				calls++
 				return nil
 			})
@@ -401,7 +403,7 @@ func BenchmarkRead(b *testing.B) {
 			b.SetBytes(int64(len(data)))
 			b.ReportAllocs()
 			for b.Loop() {
-				err := Read(strings.NewReader(data), workers, func(string, []string) error {
+				err := Read(strings.NewReader(data), workers, func(string, string, []string) error {
 					return nil
 				})
 				if err != nil {
@@ -440,7 +442,7 @@ func TestReadTSV(t *testing.T) {
 				t.Run(tt.name, func(t *testing.T) {
 					var ids []string
 					var terms [][]string
-					err := ReadTSV(strings.NewReader(tt.input), workers, func(id string, analyzed []string) error {
+					err := ReadTSV(strings.NewReader(tt.input), workers, func(id, _ string, analyzed []string) error {
 						ids = append(ids, id)
 						terms = append(terms, analyzed)
 						return nil
@@ -476,7 +478,7 @@ func TestReadTSVErrorsKeepOrder(t *testing.T) {
 			t.Run(fmt.Sprintf("workers=%d/stop=%d", workers, stopAt), func(t *testing.T) {
 				calls := 0
 				visitErr := errors.New("visitor stopped")
-				err := ReadTSV(strings.NewReader(input.String()+"bad"), workers, func(id string, terms []string) error {
+				err := ReadTSV(strings.NewReader(input.String()+"bad"), workers, func(id, _ string, terms []string) error {
 					if want := fmt.Sprintf("d%d", calls); id != want {
 						t.Errorf("ID = %q, want %q", id, want)
 					}
@@ -505,7 +507,7 @@ func TestReadTSVReadError(t *testing.T) {
 				reader := io.MultiReader(strings.NewReader("\na\tfish\n"), iotest.ErrReader(io.ErrUnexpectedEOF))
 				calls := 0
 				visitErr := errors.New("visitor stopped")
-				err := ReadTSV(reader, workers, func(string, []string) error {
+				err := ReadTSV(reader, workers, func(string, string, []string) error {
 					calls++
 					if stop {
 						return visitErr
@@ -529,7 +531,7 @@ func TestReadTSVLongLine(t *testing.T) {
 	for _, workers := range []int{1, 4} {
 		t.Run(fmt.Sprintf("workers=%d", workers), func(t *testing.T) {
 			calls := 0
-			err := ReadTSV(strings.NewReader("a\t"+text+"\n"), workers, func(id string, terms []string) error {
+			err := ReadTSV(strings.NewReader("a\t"+text+"\n"), workers, func(id, _ string, terms []string) error {
 				calls++
 				if id != "a" || len(terms) != 250000 {
 					t.Fatalf("ID = %q, terms = %d", id, len(terms))
@@ -564,7 +566,7 @@ func TestReadFileFormat(t *testing.T) {
 				wantIDs := []string{"a", "b", "c"}
 				wantTerms := [][]string{{"red", "fish"}, {"blue", "fish"}, nil}
 				calls := 0
-				err := ReadFile(path, workers, func(id string, terms []string) error {
+				err := ReadFile(path, workers, func(id, _ string, terms []string) error {
 					if calls >= len(wantIDs) {
 						t.Fatal("too many visits")
 					}
@@ -595,7 +597,7 @@ func TestReadTSVIDsDoNotRetainLines(t *testing.T) {
 	runtime.GC()
 	var before runtime.MemStats
 	runtime.ReadMemStats(&before)
-	err := ReadTSV(strings.NewReader(data), 2, func(id string, _ []string) error {
+	err := ReadTSV(strings.NewReader(data), 2, func(id, _ string, _ []string) error {
 		ids = append(ids, id)
 		return nil
 	})

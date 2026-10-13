@@ -33,6 +33,12 @@ type searcher interface {
 	ExternalID(uint32) string
 }
 
+// textStore is implemented by saved indexes, which may store document text.
+type textStore interface {
+	HasText() bool
+	Text(uint32) string
+}
+
 var (
 	_ searcher = (*index.Disk)(nil)
 	_ searcher = (*index.Index)(nil)
@@ -241,6 +247,7 @@ type searchResult struct {
 	Rank  int     `json:"rank"`
 	ID    string  `json:"id"`
 	Score float64 `json:"score"`
+	Text  *string `json:"text,omitempty"` // Only when the index stores text
 }
 
 type searchResponse struct {
@@ -281,8 +288,14 @@ func (h *handler) search(w http.ResponseWriter, r *http.Request) {
 		Query: p.query, Algo: p.algo, K: p.k, TookMS: took,
 		Results: make([]searchResult, len(results)),
 	}
+	texts, hasText := h.ix.(textStore)
+	hasText = hasText && texts.HasText()
 	for i, result := range results {
 		response.Results[i] = searchResult{Rank: i + 1, ID: h.ix.ExternalID(result.DocID), Score: result.Score}
+		if hasText {
+			text := texts.Text(result.DocID)
+			response.Results[i].Text = &text
+		}
 	}
 	writeJSON(w, http.StatusOK, response)
 }

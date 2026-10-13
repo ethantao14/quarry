@@ -22,7 +22,7 @@ import (
 // Title and text are indexed together as one field.
 func Load(r io.Reader) (*index.Index, error) {
 	ix := index.New()
-	if err := Read(r, runtime.GOMAXPROCS(0), func(externalID string, terms []string) error {
+	if err := Read(r, runtime.GOMAXPROCS(0), func(externalID, _ string, terms []string) error {
 		ix.Add(externalID, terms)
 		return nil
 	}); err != nil {
@@ -44,7 +44,7 @@ type job struct {
 // Read analyzes BEIR JSONL records in parallel and calls visit in input order on the calling goroutine.
 // Decoding and visit errors include the record number and are returned in input order.
 // Read waits for all its goroutines, including any in-progress r.Read call, before returning.
-func Read(r io.Reader, workers int, visit func(externalID string, terms []string) error) error {
+func Read(r io.Reader, workers int, visit func(externalID, text string, terms []string) error) error {
 	decoder := json.NewDecoder(r)
 	recordNumber := 0
 	next := func() (int, string, string, error) {
@@ -58,7 +58,12 @@ func Read(r io.Reader, workers int, visit func(externalID string, terms []string
 		if err == nil && record.ID == "" {
 			err = errors.New("_id is empty")
 		}
-		return recordNumber, record.ID, record.Title + " " + record.Text, err
+		// A newline keeps the title on its own line in stored text; analysis treats it like a space.
+		text := record.Text
+		if record.Title != "" {
+			text = record.Title + "\n" + record.Text
+		}
+		return recordNumber, record.ID, text, err
 	}
 	return readRecords(next, "record", workers, visit)
 }
@@ -66,7 +71,7 @@ func Read(r io.Reader, workers int, visit func(externalID string, terms []string
 // ReadTSV analyzes id<TAB>text lines in parallel and calls visit in input order.
 // Empty lines are skipped and errors include the input line number.
 // ReadTSV waits for all its goroutines before returning.
-func ReadTSV(r io.Reader, workers int, visit func(externalID string, terms []string) error) error {
+func ReadTSV(r io.Reader, workers int, visit func(externalID, text string, terms []string) error) error {
 	source := &tsvReader{reader: bufio.NewReader(r)}
 	return readRecords(source.next, "line", workers, visit)
 }
@@ -112,7 +117,7 @@ func (r *tsvReader) next() (int, string, string, error) {
 type recordSource func() (position int, id, text string, err error)
 
 // readRecords runs the ordered pipeline; label names the position in errors ("record" or "line").
-func readRecords(next recordSource, label string, workers int, visit func(string, []string) error) error {
+func readRecords(next recordSource, label string, workers int, visit func(id, text string, terms []string) error) error {
 	if workers < 1 {
 		return errors.New("workers must be at least 1")
 	}
@@ -144,7 +149,7 @@ func readRecords(next recordSource, label string, workers int, visit func(string
 			return fmt.Errorf("%s %d: %w", label, pending.position, pending.err)
 		}
 		terms := <-pending.result
-		if err := visit(pending.id, terms); err != nil {
+		if err := visit(pending.id, pending.text, terms); err != nil {
 			return fmt.Errorf("%s %d: %w", label, pending.position, err)
 		}
 	}
@@ -202,7 +207,7 @@ func analyzeJobs(jobs <-chan job, done <-chan struct{}) {
 // LoadFile indexes a BEIR JSONL corpus, or TSV when the file ends in .tsv.
 func LoadFile(path string) (*index.Index, error) {
 	ix := index.New()
-	if err := ReadFile(path, runtime.GOMAXPROCS(0), func(externalID string, terms []string) error {
+	if err := ReadFile(path, runtime.GOMAXPROCS(0), func(externalID, _ string, terms []string) error {
 		ix.Add(externalID, terms)
 		return nil
 	}); err != nil {
@@ -212,7 +217,7 @@ func LoadFile(path string) (*index.Index, error) {
 }
 
 // ReadFile visits a BEIR JSONL corpus, or TSV when the file ends in .tsv.
-func ReadFile(path string, workers int, visit func(externalID string, terms []string) error) error {
+func ReadFile(path string, workers int, visit func(externalID, text string, terms []string) error) error {
 	file, err := os.Open(path)
 	if err != nil {
 		return fmt.Errorf("open corpus: %w", err)

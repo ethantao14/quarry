@@ -83,12 +83,12 @@ func TestMergeMappingsReleased(t *testing.T) {
 		}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			builder, err := NewBuilder(filepath.Join(t.TempDir(), "idx"), 1)
+			builder, err := NewBuilder(filepath.Join(t.TempDir(), "idx"), 1, false)
 			if err != nil {
 				t.Fatal(err)
 			}
 			for range 3 {
-				if err := builder.Add("doc", []string{"shared"}); err != nil {
+				if err := builder.Add("doc", "", []string{"shared"}); err != nil {
 					t.Fatal(err)
 				}
 			}

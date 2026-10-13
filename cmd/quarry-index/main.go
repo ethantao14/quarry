@@ -34,6 +34,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	out := flags.String("out", "", "path to a new index directory")
 	memBudget := flags.String("mem-budget", "1GB", "memory budget for the whole build in bytes, KB, MB, or GB (limits the Go heap from 256MB)")
 	workers := flags.Int("workers", runtime.GOMAXPROCS(0), "number of goroutines that analyze documents")
+	storeText := flags.Bool("store-text", false, "also store each document's text, so search results can show it")
 	err := flags.Parse(args)
 	if errors.Is(err, flag.ErrHelp) {
 		return nil
@@ -56,7 +57,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 	applyMemoryLimit(budget)
 	start := time.Now()
-	segments, err := build(*corpusPath, *out, chunkBudget(budget), *workers)
+	segments, err := build(*corpusPath, *out, chunkBudget(budget), *workers, *storeText)
 	elapsed := time.Since(start)
 	if err != nil {
 		return err
@@ -99,8 +100,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 
 // build indexes the corpus into out. On failure it removes the partial index, so
 // a rerun can start clean. Abort removes only the directory NewBuilder created.
-func build(corpusPath, out string, budget int64, workers int) (int, error) {
-	builder, err := index.NewBuilder(out, budget)
+func build(corpusPath, out string, budget int64, workers int, storeText bool) (int, error) {
+	builder, err := index.NewBuilder(out, budget, storeText)
 	if err != nil {
 		return 0, err
 	}
