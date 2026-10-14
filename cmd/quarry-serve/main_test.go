@@ -258,6 +258,48 @@ func TestRouting(t *testing.T) {
 	}
 }
 
+func TestPage(t *testing.T) {
+	_, ix := savedIndex(t)
+	h := testHandler(t, ix, testOptions())
+	w := request(h, http.MethodGet, "/")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	if got := w.Header().Get("Content-Type"); got != "text/html; charset=utf-8" {
+		t.Errorf("Content-Type = %q, want text/html; charset=utf-8", got)
+	}
+	body := w.Body.String()
+	for _, want := range []string{"<form", `fetch("/search?"`, `fetch("/healthz")`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("page is missing %q", want)
+		}
+	}
+	// Document text must never be parsed as HTML in the browser.
+	for _, banned := range []string{"innerHTML", "outerHTML", "insertAdjacentHTML", "document.write"} {
+		if strings.Contains(body, banned) {
+			t.Errorf("page uses %s", banned)
+		}
+	}
+	w = request(h, http.MethodPost, "/")
+	checkError(t, w, http.StatusMethodNotAllowed, "method not allowed")
+	checkError(t, request(h, http.MethodGet, "/index.html"), http.StatusNotFound, "not found")
+
+	server := httptest.NewServer(h)
+	defer server.Close()
+	response, err := http.Head(server.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	headBody, err := io.ReadAll(response.Body)
+	_ = response.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK || len(headBody) != 0 || !strings.HasPrefix(response.Header.Get("Content-Type"), "text/html") {
+		t.Errorf("HEAD /: status = %d, headers = %v, body = %q", response.StatusCode, response.Header, headBody)
+	}
+}
+
 func TestSearchFailure(t *testing.T) {
 	_, ix := savedIndex(t)
 	var logs bytes.Buffer
