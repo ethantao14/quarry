@@ -125,11 +125,16 @@ function render(data) {
   }
 }
 
+// Each search or navigation bumps this, so a slower earlier response is dropped.
+let generation = 0;
+
 async function search(params) {
+  const current = ++generation;
   showStatus("Searching…", false);
   try {
     const response = await fetch("/search?" + params.toString());
     const data = await response.json();
+    if (current !== generation) return;
     if (!response.ok) {
       list.replaceChildren();
       showStatus("Error: " + data.error, true);
@@ -137,6 +142,7 @@ async function search(params) {
     }
     render(data);
   } catch (err) {
+    if (current !== generation) return;
     list.replaceChildren();
     showStatus("Could not reach the server.", true);
   }
@@ -150,18 +156,22 @@ function paramsFromForm() {
   });
 }
 
+const defaults = { q: "", algo: "bmw", k: "10" };
+
 function loadFromURL() {
+  // Missing or unknown values fall back to defaults, so a URL always means the same search.
   const params = new URLSearchParams(window.location.search);
   for (const name of ["q", "algo", "k"]) {
     const field = document.getElementById(name);
     const value = params.get(name);
-    if (value !== null && (name === "q" || field.querySelector("option[value='" + CSS.escape(value) + "']"))) {
-      field.value = value;
-    }
+    const allowed = value !== null &&
+      (name === "q" || field.querySelector("option[value='" + CSS.escape(value) + "']"));
+    field.value = allowed ? value : defaults[name];
   }
   if (params.get("q")) {
     search(paramsFromForm());
   } else {
+    generation++;
     list.replaceChildren();
     showStatus("", false);
   }
