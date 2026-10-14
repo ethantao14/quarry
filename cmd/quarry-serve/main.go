@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -38,6 +39,11 @@ type textStore interface {
 	HasText() bool
 	Text(uint32) string
 }
+
+// page is the search page served at "/". It calls /search and /healthz from the browser.
+//
+//go:embed page.html
+var page []byte
 
 var (
 	_ searcher = (*index.Disk)(nil)
@@ -185,6 +191,8 @@ func (h *handler) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	var handle http.HandlerFunc
 	switch r.URL.Path {
+	case "/":
+		handle = servePage
 	case "/search":
 		handle = h.search
 	case "/healthz":
@@ -298,6 +306,12 @@ func (h *handler) search(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, response)
+}
+
+func servePage(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(page)
 }
 
 func (h *handler) health(w http.ResponseWriter, r *http.Request) {

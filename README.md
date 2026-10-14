@@ -78,6 +78,11 @@ go build -o bin/quarry-serve ./cmd/quarry-serve
 curl 'http://127.0.0.1:8080/search?q=red+fish&k=10'
 ```
 
+Open `http://127.0.0.1:8080/` in a browser for a search page: type a query, pick the algorithm and
+number of results, and see each result's score and (with `--store-text`) its text, plus the search
+time. The query is kept in the page URL, so a search can be shared or reloaded. The page is built
+into the binary and only calls the JSON endpoints below.
+
 The server binds to `127.0.0.1:8080` by default. Set `--addr` to change the listen address;
 `--addr 127.0.0.1:0` chooses an available port and prints the actual address at startup.
 `GET /search` returns JSON with this shape:
@@ -99,7 +104,7 @@ If the index was built with `--store-text`, each result also has a `"text"` fiel
 document's text. Ranks start at 1, scores are JSON numbers without rounding, and no matches returns
 `"results": []`. `took_ms` measures analysis plus search, excluding time waiting for a slot.
 `GET /healthz` returns `{"status":"ok","documents":8841823}` with the index's document count.
-Both endpoints also accept HEAD, which returns headers without a body.
+Both endpoints and the search page at `/` also accept HEAD, which returns headers without a body.
 
 Errors return `{"error":"message"}` with JSON content type: 400 for invalid parameters,
 404 for an unknown path, 405 for unsupported methods (with `Allow: GET, HEAD`),

@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>quarry search</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1d1f23; --muted: #626872; --line: #dde1e6;
+    --accent: #2457c5; --field: #f5f7fa; --error: #b42318;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #15171b; --fg: #e6e8eb; --muted: #9aa1ab; --line: #2c3036;
+      --accent: #7aa2ff; --field: #1e2126; --error: #ff8a80;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 760px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { margin: 0; font-size: 28px; letter-spacing: -0.5px; }
+  .tagline { margin: 4px 0 24px; color: var(--muted); font-size: 14px; }
+  form { display: flex; flex-wrap: wrap; gap: 8px; }
+  input[type=search] {
+    flex: 1 1 280px; min-width: 0; padding: 10px 12px; font: inherit; color: inherit;
+    background: var(--field); border: 1px solid var(--line); border-radius: 8px;
+  }
+  select, button {
+    padding: 10px 12px; font: inherit; color: inherit;
+    background: var(--field); border: 1px solid var(--line); border-radius: 8px;
+  }
+  button { background: var(--accent); border-color: var(--accent); color: #fff; cursor: pointer; }
+  @media (prefers-color-scheme: dark) { button { color: #0d1117; } }
+  input:focus, select:focus, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  #status { margin: 16px 0 8px; color: var(--muted); font-size: 14px; min-height: 21px; }
+  #status.error { color: var(--error); }
+  ol { list-style: none; margin: 0; padding: 0; }
+  li { padding: 14px 0; border-top: 1px solid var(--line); }
+  .meta { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+  .title { font-weight: 600; margin: 2px 0; overflow-wrap: anywhere; }
+  .text { margin: 2px 0; white-space: pre-line; overflow-wrap: anywhere; }
+  .more { padding: 0; border: 0; background: none; color: var(--accent); font-size: 14px; cursor: pointer; }
+</style>
+</head>
+<body>
+<main>
+  <h1>quarry</h1>
+  <p class="tagline" id="tagline">A disk-based search engine written from scratch in Go.</p>
+  <form id="form">
+    <input type="search" id="q" name="q" placeholder="Search" aria-label="Search query"
+           maxlength="1000" autofocus required>
+    <select id="algo" name="algo" aria-label="Retrieval algorithm">
+      <option value="bmw">Block-Max WAND</option>
+      <option value="wand">WAND</option>
+      <option value="exhaustive">Exhaustive</option>
+    </select>
+    <select id="k" name="k" aria-label="Number of results">
+      <option value="10">10 results</option>
+      <option value="50">50 results</option>
+      <option value="100">100 results</option>
+    </select>
+    <button type="submit">Search</button>
+  </form>
+  <p id="status" role="status"></p>
+  <ol id="results"></ol>
+</main>
+<script>
+"use strict";
+// All document text is inserted with textContent, never as HTML.
+const algoNames = { bmw: "Block-Max WAND", wand: "WAND", exhaustive: "Exhaustive" };
+const snippetChars = 320;
+const form = document.getElementById("form");
+const status = document.getElementById("status");
+const list = document.getElementById("results");
+
+function element(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+function showStatus(message, isError) {
+  status.textContent = message;
+  status.classList.toggle("error", isError);
+}
+
+function renderText(item, text) {
+  // Stored BEIR documents have the title on the first line.
+  const newline = text.indexOf("\n");
+  let body = text;
+  if (newline > 0) {
+    item.append(element("div", "title", text.slice(0, newline)));
+    body = text.slice(newline + 1);
+  }
+  if (body.length <= snippetChars) {
+    item.append(element("p", "text", body));
+    return;
+  }
+  const paragraph = element("p", "text", body.slice(0, snippetChars).trimEnd() + "…");
+  const toggle = element("button", "more", "Show more");
+  toggle.type = "button";
+  toggle.addEventListener("click", () => {
+    const expanded = toggle.textContent === "Show less";
+    paragraph.textContent = expanded ? body.slice(0, snippetChars).trimEnd() + "…" : body;
+    toggle.textContent = expanded ? "Show more" : "Show less";
+  });
+  item.append(paragraph, toggle);
+}
+
+function render(data) {
+  list.replaceChildren();
+  const count = data.results.length;
+  const label = count === 1 ? "1 result" : count + " results";
+  showStatus(label + " in " + data.took_ms.toFixed(2) + " ms with " + algoNames[data.algo], false);
+  for (const result of data.results) {
+    const item = element("li");
+    item.append(element("div", "meta",
+      "#" + result.rank + "  ·  doc " + result.id + "  ·  score " + result.score.toFixed(4)));
+    if (typeof result.text === "string") renderText(item, result.text);
+    list.append(item);
+  }
+}
+
+async function search(params) {
+  showStatus("Searching…", false);
+  try {
+    const response = await fetch("/search?" + params.toString());
+    const data = await response.json();
+    if (!response.ok) {
+      list.replaceChildren();
+      showStatus("Error: " + data.error, true);
+      return;
+    }
+    render(data);
+  } catch (err) {
+    list.replaceChildren();
+    showStatus("Could not reach the server.", true);
+  }
+}
+
+function paramsFromForm() {
+  return new URLSearchParams({
+    q: document.getElementById("q").value,
+    algo: document.getElementById("algo").value,
+    k: document.getElementById("k").value,
+  });
+}
+
+function loadFromURL() {
+  const params = new URLSearchParams(window.location.search);
+  for (const name of ["q", "algo", "k"]) {
+    const field = document.getElementById(name);
+    const value = params.get(name);
+    if (value !== null && (name === "q" || field.querySelector("option[value='" + CSS.escape(value) + "']"))) {
+      field.value = value;
+    }
+  }
+  if (params.get("q")) {
+    search(paramsFromForm());
+  } else {
+    list.replaceChildren();
+    showStatus("", false);
+  }
+}
+
+form.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const params = paramsFromForm();
+  // Keep the query in the address bar so a search can be shared or reloaded.
+  history.pushState(null, "", "/?" + params.toString());
+  search(params);
+});
+window.addEventListener("popstate", loadFromURL);
+
+fetch("/healthz").then((r) => r.json()).then((data) => {
+  document.getElementById("tagline").textContent =
+    "A disk-based search engine written from scratch in Go, searching " +
+    data.documents.toLocaleString() + " documents.";
+}).catch(() => {});
+loadFromURL();
+</script>
+</body>
+</html>
