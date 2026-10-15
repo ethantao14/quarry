@@ -15,6 +15,21 @@ WAND and Block-Max WAND retrieval are implemented and return identical results t
 - Go 1.27.1 or newer
 - [golangci-lint](https://golangci-lint.run/) v2 (only needed for `make lint`)
 
+## Quick demo
+
+```sh
+git clone https://github.com/ethantao14/quarry.git
+cd quarry
+scripts/demo.sh
+```
+
+This downloads BEIR SciFact (5,183 scientific abstracts, about 3 MB), builds quarry, indexes the
+abstracts with their text, and starts `quarry-serve`. Open `http://127.0.0.1:8080/` and search,
+for example `vitamin d bone density`. Run `scripts/demo.sh nfcorpus` for NFCorpus instead, and set
+`QUARRY_ADDR` to use another address. The index is saved in `data/indexes/<dataset>-demo` and
+reused on the next run; delete that directory to rebuild it. SciFact is released by AI2 under
+CC BY-NC 2.0. The demo needs Go, `curl`, and `unzip`, and runs on macOS and Linux.
+
 ## Usage
 
 ```sh
