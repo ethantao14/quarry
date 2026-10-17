@@ -1,0 +1,18 @@
+# Builds quarry-serve with a SciFact demo index baked into the image.
+# Vercel builds this file automatically; locally:
+#   docker build -f Dockerfile.vercel -t quarry-demo . && docker run -p 8080:80 quarry-demo
+FROM golang:1.27.1-bookworm AS build
+RUN apt-get update && apt-get install -y --no-install-recommends unzip && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+COPY go.mod ./
+COPY . .
+RUN CGO_ENABLED=0 go build -o /out/ ./cmd/quarry-index ./cmd/quarry-serve
+RUN scripts/download.sh scifact \
+    && /out/quarry-index --store-text --corpus data/beir/scifact/corpus.jsonl --out /out/index
+
+FROM gcr.io/distroless/static-debian12
+COPY --from=build /out/quarry-serve /quarry-serve
+COPY --from=build /out/index /index
+# Vercel sends traffic to port 80 inside the container.
+EXPOSE 80
+ENTRYPOINT ["/quarry-serve", "--index", "/index", "--addr", ":80"]
