@@ -42,6 +42,8 @@
   .meta { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
   .title { font-weight: 600; margin: 2px 0; overflow-wrap: anywhere; }
   .text { margin: 2px 0; white-space: pre-line; overflow-wrap: anywhere; }
+  footer { margin-top: 40px; color: var(--muted); font-size: 13px; }
+  footer a { color: var(--accent); }
   .more { padding: 0; border: 0; background: none; color: var(--accent); font-size: 14px; cursor: pointer; }
 </style>
 </head>
@@ -66,6 +68,10 @@
   </form>
   <p id="status" role="status"></p>
   <ol id="results"></ol>
+  <footer>
+    Source and design notes: <a href="https://github.com/ethantao14/quarry">github.com/ethantao14/quarry</a>.
+    Demo datasets come from the BEIR benchmark; SciFact is by AI2 under CC BY-NC 2.0.
+  </footer>
 </main>
 <script>
 "use strict";

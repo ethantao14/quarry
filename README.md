@@ -30,6 +30,17 @@ for example `vitamin d bone density`. Run `scripts/demo.sh nfcorpus` for NFCorpu
 reused on the next run; delete that directory to rebuild it. SciFact is released by AI2 under
 CC BY-NC 2.0. The demo needs Go, `curl`, and `unzip`, and runs on macOS and Linux.
 
+With Docker instead of Go, build and run the same demo as a container:
+
+```sh
+docker build -f Dockerfile.vercel -t quarry-demo .
+docker run -p 8080:80 quarry-demo
+```
+
+The image (about 35 MB) holds `quarry-serve` and a SciFact index with text, built during
+`docker build`. `Dockerfile.vercel` is also how the demo is deployed on Vercel: Vercel builds the
+image and runs it as a container function, routed by `vercel.json`.
+
 ## Usage
 
 ```sh
