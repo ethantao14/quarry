@@ -4,6 +4,12 @@ A full-text search engine written from scratch in Go. It builds an inverted inde
 results with BM25, and speeds up top-k retrieval with dynamic pruning (WAND and Block-Max WAND).
 It is evaluated on the public MS MARCO and BEIR benchmarks against published BM25 baselines.
 
+**Try it live: [quarry-lake.vercel.app](https://quarry-lake.vercel.app)**, searching the 5,183
+scientific abstracts of BEIR SciFact. No sign-up needed; the first search after a quiet period
+takes a moment longer while the server starts.
+
+![Searching "vitamin d bone density" in the quarry search page](docs/demo.gif)
+
 **Status:** English text analysis, BM25 search, evaluation, and on-disk indexes (built within a
 memory budget, read back with memory mapping) work, including the full MS MARCO passage corpus.
 WAND and Block-Max WAND retrieval are implemented and return identical results to exhaustive search.
