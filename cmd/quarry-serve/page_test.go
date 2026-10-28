@@ -48,7 +48,7 @@ func pageHasTag(body, name string, attrs map[string]string) bool {
 	return false
 }
 
-func TestInstrumentPageControls(t *testing.T) {
+func TestDaylightPageControls(t *testing.T) {
 	body := servedPage(t)
 	for _, tt := range []struct {
 		name, tag string
@@ -117,7 +117,7 @@ func TestInstrumentPageControls(t *testing.T) {
 	})
 }
 
-func TestInstrumentPageCopy(t *testing.T) {
+func TestDaylightPageCopy(t *testing.T) {
 	body := servedPage(t)
 	for _, want := range []string{"quarry", "A disk-based search engine written from scratch in Go.", "vitamin d bone density", "sleep deprivation memory", "antibiotic resistance", "Searching…", "Error: ", "Could not reach the server.", "Show more", "Show less"} {
 		t.Run(want, func(t *testing.T) {
@@ -127,7 +127,7 @@ func TestInstrumentPageCopy(t *testing.T) {
 		})
 	}
 	footer := regexp.MustCompile(`(?is)<footer\b[^>]*>.*?</footer\s*>`).FindString(body)
-	for _, want := range []string{"BEIR", "SciFact", "AI2", "CC BY-NC 2.0"} {
+	for _, want := range []string{"BEIR", "SciFact", "AI2", "CC BY-NC 2.0", "Type: Bricolage Grotesque (SIL OFL 1.1)."} {
 		if !strings.Contains(html.UnescapeString(footer), want) {
 			t.Errorf("footer missing credit %q", want)
 		}
@@ -137,10 +137,15 @@ func TestInstrumentPageCopy(t *testing.T) {
 	}
 }
 
-func TestInstrumentPageTheme(t *testing.T) {
+func TestDaylightPageTheme(t *testing.T) {
 	body := servedPage(t)
+	if regexp.MustCompile(`(?i)prefers-color-scheme`).MatchString(body) {
+		t.Error("light-only page must not contain a prefers-color-scheme query")
+	}
 	for _, tt := range []struct{ name, pattern string }{
-		{"dark theme", `@media\s*[^{}]*\(\s*prefers-color-scheme\s*:\s*dark\s*\)`},
+		{"light theme", `:root\s*\{[^}]*\bcolor-scheme\s*:\s*light\s*(?:;|})`},
+		{"cobalt token", `:root\s*\{[^}]*--cobalt\s*:\s*#2a44ff\s*(?:;|})`},
+		{"mint token", `:root\s*\{[^}]*--mint\s*:\s*#2fd6a3\s*(?:;|})`},
 		{"reduced motion", `@media\s*[^{}]*\(\s*prefers-reduced-motion(?:\s*:\s*reduce)?\s*\)`},
 		{"focus rings", `:focus-visible\b`},
 		{"root custom properties", `:root\s*\{[^}]*--[\w-]+\s*:`},
@@ -154,7 +159,32 @@ func TestInstrumentPageTheme(t *testing.T) {
 	}
 }
 
-func TestInstrumentPageSelfContained(t *testing.T) {
+func TestDaylightPageFont(t *testing.T) {
+	body := servedPage(t)
+	var face string
+	for _, candidate := range regexp.MustCompile(`(?is)@font-face\s*\{[^}]*}`).FindAllString(body, -1) {
+		if regexp.MustCompile(`(?i)font-family\s*:\s*["']Bricolage Grotesque["']\s*(?:;|})`).MatchString(candidate) {
+			face = candidate
+			break
+		}
+	}
+	if face == "" {
+		t.Fatal("missing Bricolage Grotesque @font-face")
+	}
+	for _, tt := range []struct{ name, pattern string }{
+		{"font source", `src\s*:\s*url\(\s*["']/fonts/bricolage-grotesque\.woff2["']\s*\)\s*format\(\s*["']woff2["']\s*\)\s*(?:;|})`},
+		{"variable weights", `font-weight\s*:\s*400\s+800\s*(?:;|})`},
+		{"font display", `font-display\s*:\s*swap\s*(?:;|})`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if !regexp.MustCompile(`(?is)` + tt.pattern).MatchString(face) {
+				t.Errorf("missing %s in Bricolage Grotesque @font-face", tt.name)
+			}
+		})
+	}
+}
+
+func TestDaylightPageSelfContained(t *testing.T) {
 	body := servedPage(t)
 	for _, tag := range regexp.MustCompile(`(?is)<(?:script|link)\b[^>]*>`).FindAllString(body, -1) {
 		if strings.HasPrefix(strings.ToLower(tag), "<script") && pageAttribute(tag, "src") != "" {
@@ -178,7 +208,7 @@ func TestInstrumentPageSelfContained(t *testing.T) {
 	}
 }
 
-func TestInstrumentPageScriptContract(t *testing.T) {
+func TestDaylightPageScriptContract(t *testing.T) {
 	body := servedPage(t)
 	for _, banned := range []string{"innerHTML", "outerHTML", "insertAdjacentHTML", "document.write"} {
 		if strings.Contains(body, banned) {
@@ -200,13 +230,19 @@ func TestInstrumentPageScriptContract(t *testing.T) {
 	}
 }
 
-func TestInstrumentPageNoPurple(t *testing.T) {
+func TestDaylightPageNoPurpleOrOrange(t *testing.T) {
 	body := servedPage(t)
 	// Consume the whole hex token so longer values cannot be mistaken for #rgb.
 	for _, token := range regexp.MustCompile(`(?i)#[0-9a-f]+\b`).FindAllString(body, -1) {
 		hex := token[1:]
-		if len(hex) != 3 && len(hex) != 6 {
+		if len(hex) != 3 && len(hex) != 4 && len(hex) != 6 && len(hex) != 8 {
 			continue
+		}
+		// Ignore alpha when checking the hue of CSS hex colors.
+		if len(hex) == 4 {
+			hex = hex[:3]
+		} else if len(hex) == 8 {
+			hex = hex[:6]
 		}
 		if len(hex) == 3 {
 			hex = strings.Repeat(hex[0:1], 2) + strings.Repeat(hex[1:2], 2) + strings.Repeat(hex[2:3], 2)
@@ -221,7 +257,7 @@ func TestInstrumentPageNoPurple(t *testing.T) {
 		if delta == 0 {
 			continue
 		}
-		// HSL saturation distinguishes muted greys from saturated purple.
+		// HSL saturation distinguishes muted greys from saturated colors.
 		saturation := delta / (1 - math.Abs(high+low-1))
 		var hue float64
 		switch high {
@@ -235,13 +271,16 @@ func TestInstrumentPageNoPurple(t *testing.T) {
 		if hue < 0 {
 			hue += 360
 		}
+		if hue >= 15 && hue <= 45 && saturation > 0.50 {
+			t.Errorf("orange color %s: hue %.1f°, saturation %.1f%%", token, hue, saturation*100)
+		}
 		if hue >= 250 && hue <= 320 && saturation > 0.25 {
 			t.Errorf("purple color %s: hue %.1f°, saturation %.1f%%", token, hue, saturation*100)
 		}
 	}
 }
 
-func TestInstrumentPageAccessibleNames(t *testing.T) {
+func TestDaylightPageAccessibleNames(t *testing.T) {
 	body := servedPage(t)
 	t.Run("single status readout", func(t *testing.T) {
 		count := 0
@@ -269,7 +308,7 @@ func TestInstrumentPageAccessibleNames(t *testing.T) {
 	})
 }
 
-func TestInstrumentPageStopwords(t *testing.T) {
+func TestDaylightPageStopwords(t *testing.T) {
 	body := servedPage(t)
 	declarations := regexp.MustCompile(`(?s)\bconst\s+stopwords\s*=\s*new\s+Set\s*\(\s*\[(.*?)\]\s*\)\s*;`).FindAllStringSubmatch(body, -1)
 	if len(declarations) != 1 {
@@ -314,7 +353,7 @@ func TestInstrumentPageStopwords(t *testing.T) {
 	}
 }
 
-func TestInstrumentPageSafari15APIs(t *testing.T) {
+func TestDaylightPageSafari15APIs(t *testing.T) {
 	body := servedPage(t)
 	for _, banned := range []string{"Object.hasOwn", "requestSubmit"} {
 		t.Run(banned, func(t *testing.T) {
@@ -323,4 +362,81 @@ func TestInstrumentPageSafari15APIs(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDaylightPageReviewAddendum(t *testing.T) {
+	body := servedPage(t)
+	script := strings.Join(regexp.MustCompile(`(?is)<script\b[^>]*>(.*?)</script\s*>`).FindAllString(body, -1), "\n")
+	css := strings.Join(regexp.MustCompile(`(?is)<style\b[^>]*>(.*?)</style\s*>`).FindAllString(body, -1), "\n")
+
+	t.Run("animated latency hidden from screen readers", func(t *testing.T) {
+		if count := strings.Count(script, `setAttribute("aria-hidden", "true")`); count < 2 {
+			t.Errorf("script has %d aria-hidden=true calls, want at least 2", count)
+		}
+		// Capture the element identifier, then require that same element to be
+		// hidden directly or by a for...of loop containing it in an array literal.
+		latency := regexp.MustCompile(`\b(?:const|let|var)\s+([\w$]+)\s*=\s*[\w$.]+\([^;\n]*["']latency["'][^;\n]*\)`).FindStringSubmatch(script)
+		if latency == nil {
+			t.Fatal(`script missing element creation with class "latency"`)
+		}
+		hideCall := `\s*\.\s*setAttribute\(\s*["']aria-hidden["']\s*,\s*["']true["']\s*\)`
+		hidden := regexp.MustCompile(`\b` + regexp.QuoteMeta(latency[1]) + hideCall).MatchString(script)
+		for _, loop := range regexp.MustCompile(`(?s)\bfor\s*\(\s*(?:const|let|var)\s+([\w$]+)\s+of\s*\[([^\]]*)\]\s*\)\s*(?:\{([^{}]*)\}|([^;{}]*;))`).FindAllStringSubmatch(script, -1) {
+			for _, element := range strings.Split(loop[2], ",") {
+				if strings.TrimSpace(element) == latency[1] && regexp.MustCompile(`\b`+regexp.QuoteMeta(loop[1])+hideCall).MatchString(loop[3]+loop[4]) {
+					hidden = true
+				}
+			}
+		}
+		if !hidden {
+			t.Errorf("visible latency element %s must have aria-hidden=true", latency[1])
+		}
+	})
+	t.Run("visually hidden status text", func(t *testing.T) {
+		if !strings.Contains(script, `"visually-hidden"`) {
+			t.Error(`script missing "visually-hidden" class for status text`)
+		}
+		if !regexp.MustCompile(`["']Latency ["']\s*\+`).MatchString(script) {
+			t.Error(`script must build status text with the prefix "Latency "`)
+		}
+		if !regexp.MustCompile(`\.visually-hidden\s*\{[^}]*}`).MatchString(css) {
+			t.Error("CSS missing .visually-hidden rule")
+		}
+	})
+
+	// Restrict declarations to the search input's base and focus rules.
+	searchSelector := `input\[type\s*=\s*["']?search["']?\]`
+	t.Run("search focus-visible forced-colors outline", func(t *testing.T) {
+		rule := regexp.MustCompile(searchSelector + `:focus-visible\s*\{([^}]*)}`).FindStringSubmatch(css)
+		if rule == nil {
+			t.Fatal("CSS missing search input :focus-visible rule")
+		}
+		if !regexp.MustCompile(`(?:^|;)\s*outline\s*:\s*2px\s+solid\s+transparent\s*(?:;|$)`).MatchString(rule[1]) {
+			t.Error("search input :focus-visible must set outline: 2px solid transparent")
+		}
+		if regexp.MustCompile(`(?:^|;)\s*outline\s*:\s*none\s*(?:!important\s*)?(?:;|$)`).MatchString(rule[1]) {
+			t.Error("search input :focus-visible must not set outline: none")
+		}
+	})
+	baseRule := regexp.MustCompile(searchSelector + `\s*\{([^}]*)}`).FindStringSubmatch(css)
+	focusRules := regexp.MustCompile(searchSelector+`:focus(?:-visible)?\s*\{([^}]*)}`).FindAllStringSubmatch(css, -1)
+	var focusCSS string
+	for _, rule := range focusRules {
+		focusCSS += rule[1] + ";"
+	}
+	for _, property := range []string{"box-shadow", "background"} {
+		t.Run("search focus "+property, func(t *testing.T) {
+			if !regexp.MustCompile(`(?:^|;)\s*` + property + `\s*:\s*[^;\s][^;]*`).MatchString(focusCSS) {
+				t.Errorf("search input focus rule missing %s", property)
+			}
+		})
+	}
+	t.Run("search base border width", func(t *testing.T) {
+		if baseRule == nil {
+			t.Fatal("CSS missing search input base rule")
+		}
+		if !regexp.MustCompile(`(?:^|;)\s*border-bottom(?:-width)?\s*:\s*4px(?:\s|;|$)`).MatchString(baseRule[1]) {
+			t.Error("search input base rule must set border-bottom width to 4px")
+		}
+	})
 }
