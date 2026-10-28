@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/ethantao14/quarry/internal/analysis"
 )
 
 func servedPage(t *testing.T) string {
@@ -75,15 +77,28 @@ func TestInstrumentPageControls(t *testing.T) {
 		if fieldset == "" {
 			t.Fatal("missing fieldset with legend Retrieval algorithm")
 		}
-		for _, algo := range []string{"bmw", "wand", "exhaustive"} {
-			if !pageHasTag(fieldset, "input", map[string]string{"type": "radio", "name": "algo", "value": algo}) {
-				t.Errorf("missing algo radio %q inside fieldset", algo)
-			}
-		}
-		for _, label := range []string{"Block-Max WAND", "WAND", "Exhaustive"} {
-			if !regexp.MustCompile(`(?is)<label\b[^>]*>[^<]*(?:<[^>]+>[^<]*)*?` + regexp.QuoteMeta(label) + `.*?</label\s*>`).MatchString(fieldset) {
-				t.Errorf("missing algorithm label %q", label)
-			}
+		labels := regexp.MustCompile(`(?is)<label\b[^>]*>.*?</label\s*>`).FindAllString(fieldset, -1)
+		for _, tt := range []struct{ value, label string }{
+			{"bmw", "Block-Max WAND"},
+			{"wand", "WAND"},
+			{"exhaustive", "Exhaustive"},
+		} {
+			t.Run(tt.value, func(t *testing.T) {
+				var matchingLabels []string
+				for _, label := range labels {
+					if pageHasTag(label, "input", map[string]string{"type": "radio", "name": "algo", "value": tt.value}) {
+						matchingLabels = append(matchingLabels, label)
+					}
+				}
+				if len(matchingLabels) != 1 {
+					t.Fatalf("algo radio %q has %d containing labels, want 1", tt.value, len(matchingLabels))
+				}
+				text := regexp.MustCompile(`<[^>]*>`).ReplaceAllString(matchingLabels[0], "")
+				text = strings.Join(strings.Fields(html.UnescapeString(text)), " ")
+				if text != tt.label {
+					t.Errorf("algo radio %q label = %q, want exactly %q", tt.value, text, tt.label)
+				}
+			})
 		}
 	})
 	t.Run("limit options", func(t *testing.T) {
@@ -223,5 +238,89 @@ func TestInstrumentPageNoPurple(t *testing.T) {
 		if hue >= 250 && hue <= 320 && saturation > 0.25 {
 			t.Errorf("purple color %s: hue %.1f°, saturation %.1f%%", token, hue, saturation*100)
 		}
+	}
+}
+
+func TestInstrumentPageAccessibleNames(t *testing.T) {
+	body := servedPage(t)
+	t.Run("single status readout", func(t *testing.T) {
+		count := 0
+		for _, tag := range regexp.MustCompile(`(?is)<[a-z][a-z0-9]*\b[^>]*>`).FindAllString(body, -1) {
+			if pageAttribute(tag, "role") == "status" {
+				count++
+				if id := pageAttribute(tag, "id"); id != "status" {
+					t.Errorf("element with role=status has id=%q, want status", id)
+				}
+			}
+		}
+		if count != 1 {
+			t.Errorf("found %d elements with role=status, want exactly 1", count)
+		}
+	})
+	t.Run("query label", func(t *testing.T) {
+		if !pageHasTag(body, "label", map[string]string{"for": "q"}) {
+			t.Error("missing label for=q")
+		}
+		for _, tag := range regexp.MustCompile(`(?is)<input\b[^>]*>`).FindAllString(body, -1) {
+			if pageAttribute(tag, "id") == "q" && regexp.MustCompile(`(?i)\saria-label(?:\s|=|/?>)`).MatchString(tag) {
+				t.Error("input#q has an aria-label; its label should supply its accessible name")
+			}
+		}
+	})
+}
+
+func TestInstrumentPageStopwords(t *testing.T) {
+	body := servedPage(t)
+	declarations := regexp.MustCompile(`(?s)\bconst\s+stopwords\s*=\s*new\s+Set\s*\(\s*\[(.*?)\]\s*\)\s*;`).FindAllStringSubmatch(body, -1)
+	if len(declarations) != 1 {
+		t.Fatalf("found %d const stopwords = new Set([...]); declarations, want 1", len(declarations))
+	}
+	// The spec requires double-quoted entries; allow whitespace and a trailing comma.
+	list := strings.TrimSpace(declarations[0][1])
+	list = strings.TrimSuffix(list, ",")
+	entries := strings.Split(list, ",")
+	words := make(map[string]bool)
+	for _, entry := range entries {
+		entry = strings.TrimSpace(entry)
+		if len(entry) < 2 || entry[0] != '"' || entry[len(entry)-1] != '"' {
+			t.Fatalf("stopword entry %q must be a double-quoted string", entry)
+		}
+		word, err := strconv.Unquote(entry)
+		if err != nil {
+			t.Fatalf("invalid stopword entry %q: %v", entry, err)
+		}
+		if words[word] {
+			t.Errorf("duplicate stopword %q", word)
+		}
+		words[word] = true
+		t.Run("listed/"+word, func(t *testing.T) {
+			if tokens := analysis.Analyze(word); len(tokens) != 0 {
+				t.Errorf("Analyze(%q) = %v; listed stopwords must produce no tokens", word, tokens)
+			}
+		})
+	}
+	if len(entries) != 33 || len(words) != 33 {
+		t.Errorf("stopword list has %d entries and %d unique words, want 33 of each", len(entries), len(words))
+	}
+	// Include every spec word and retained words, notably "now" alongside "not".
+	candidates := strings.Fields("a an and are as at be but by for if in into is it no not of on or such that the their then there these they this to was will with sleep vitamin now")
+	for _, word := range candidates {
+		t.Run("coverage/"+word, func(t *testing.T) {
+			dropped := len(analysis.Analyze(word)) == 0
+			if words[word] != dropped {
+				t.Errorf("stopwords contains %q = %t, analyzer drops it = %t", word, words[word], dropped)
+			}
+		})
+	}
+}
+
+func TestInstrumentPageSafari15APIs(t *testing.T) {
+	body := servedPage(t)
+	for _, banned := range []string{"Object.hasOwn", "requestSubmit"} {
+		t.Run(banned, func(t *testing.T) {
+			if strings.Contains(body, banned) {
+				t.Errorf("page contains API newer than Safari 15: %s", banned)
+			}
+		})
 	}
 }

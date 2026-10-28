@@ -92,6 +92,7 @@
   @media (max-width: 540px) {
     main { padding-top: 20px; }
     form { padding: 12px; }
+    .enter-hint { display: none; }
     .segments { width: 100%; }
     .segments label { flex: 1; }
     .segments span { width: 100%; padding: 9px 6px; text-align: center; font-size: 11px; }
@@ -107,7 +108,7 @@
   <header>
     <div class="header-row">
       <h1>quarry</h1>
-      <div class="health" id="health" role="status">
+      <div class="health" id="health">
         <span class="dot" aria-hidden="true"></span><span id="documents">— docs</span>
       </div>
     </div>
@@ -116,7 +117,7 @@
   <form id="form">
     <label class="label" for="q">Search query</label>
     <div class="query-field">
-      <input type="search" id="q" name="q" placeholder="Search" aria-label="Search query"
+      <input type="search" id="q" name="q" placeholder="Search"
              maxlength="1000" autofocus required>
       <span class="enter-hint" aria-hidden="true">⏎ enter</span>
     </div>
@@ -153,6 +154,11 @@
 // All document text is inserted with textContent, never as HTML.
 const algoNames = { bmw: "Block-Max WAND", wand: "WAND", exhaustive: "Exhaustive" };
 const snippetChars = 320;
+const stopwords = new Set([
+  "a", "an", "and", "are", "as", "at", "be", "but", "by", "for", "if",
+  "in", "into", "is", "it", "no", "not", "of", "on", "or", "such", "that",
+  "the", "their", "then", "there", "these", "they", "this", "to", "was", "will", "with"
+]);
 const form = document.getElementById("form");
 const status = document.getElementById("status");
 const list = document.getElementById("results");
@@ -171,20 +177,28 @@ function showStatus(message, isError) {
 }
 
 function queryPattern(query) {
-  const words = query.toLowerCase().split(/[^\p{L}\p{N}]+/u);
-  const unique = [...new Set(words.filter((word) => word.length >= 2))];
+  const words = query.normalize("NFC").split(/[^\p{L}\p{N}]+/u);
+  const seen = new Set();
+  const unique = [];
+  for (const word of words) {
+    const lowercase = word.toLowerCase();
+    if (word.length < 2 || stopwords.has(lowercase) || seen.has(lowercase)) continue;
+    seen.add(lowercase);
+    unique.push(word);
+  }
   if (unique.length === 0) return null;
+  // Escape regex special characters defensively.
   const escaped = unique.map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
   return new RegExp("(^|[^\\p{L}\\p{N}])(" + escaped.join("|") + ")(?=$|[^\\p{L}\\p{N}])", "giu");
 }
 
 function highlight(node, text, pattern) {
+  text = text.normalize("NFC");
   node.replaceChildren();
   if (!pattern) {
     node.textContent = text;
     return;
   }
-  pattern.lastIndex = 0;
   let offset = 0;
   for (const match of text.matchAll(pattern)) {
     const start = match.index + match[1].length;
@@ -300,7 +314,7 @@ function loadFromURL() {
   const params = new URLSearchParams(window.location.search);
   document.getElementById("q").value = params.get("q") || defaults.q;
   const algorithm = params.get("algo");
-  const allowedAlgorithm = Object.hasOwn(algoNames, algorithm) ? algorithm : defaults.algo;
+  const allowedAlgorithm = Object.prototype.hasOwnProperty.call(algoNames, algorithm) ? algorithm : defaults.algo;
   for (const radio of document.querySelectorAll('input[name="algo"]')) {
     radio.checked = radio.value === allowedAlgorithm;
   }
@@ -316,19 +330,23 @@ function loadFromURL() {
   }
 }
 
-form.addEventListener("submit", (event) => {
-  event.preventDefault();
+function submitSearch() {
   const params = paramsFromForm();
   // Keep the query in the address bar so a search can be shared or reloaded.
   history.pushState(null, "", "/?" + params.toString());
   search(params);
+}
+
+form.addEventListener("submit", (event) => {
+  event.preventDefault();
+  submitSearch();
 });
 window.addEventListener("popstate", loadFromURL);
 
 for (const button of examples.querySelectorAll("button")) {
   button.addEventListener("click", () => {
     document.getElementById("q").value = button.textContent;
-    form.requestSubmit();
+    submitSearch();
   });
 }
 
@@ -338,7 +356,9 @@ fetch("/healthz").then((response) => {
 }).then((data) => {
   document.getElementById("documents").textContent = data.documents.toLocaleString() + " docs";
   document.getElementById("health").classList.add("online");
-}).catch(() => {});
+}).catch(() => {
+  document.getElementById("documents").textContent = "offline";
+});
 loadFromURL();
 </script>
 </body>
