@@ -114,7 +114,8 @@ Open `http://127.0.0.1:8080/` in a browser for a search page: type a query, pick
 number of results, and see each result's score and (with `--store-text`) its text, plus the search
 time. Each score bar is relative to the top result, and the words you typed are highlighted in the
 text. The query is kept in the page URL, so a search can be shared or reloaded. The page is built
-into the binary and only calls the JSON endpoints below.
+into the binary and calls the JSON endpoints below. Its font is Bricolage Grotesque under the
+SIL Open Font License, embedded in the binary.
 
 The server binds to `127.0.0.1:8080` by default. Set `--addr` to change the listen address;
 `--addr 127.0.0.1:0` chooses an available port and prints the actual address at startup.

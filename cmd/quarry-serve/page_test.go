@@ -48,7 +48,7 @@ func pageHasTag(body, name string, attrs map[string]string) bool {
 	return false
 }
 
-func TestInstrumentPageControls(t *testing.T) {
+func TestDaylightPageControls(t *testing.T) {
 	body := servedPage(t)
 	for _, tt := range []struct {
 		name, tag string
@@ -117,7 +117,7 @@ func TestInstrumentPageControls(t *testing.T) {
 	})
 }
 
-func TestInstrumentPageCopy(t *testing.T) {
+func TestDaylightPageCopy(t *testing.T) {
 	body := servedPage(t)
 	for _, want := range []string{"quarry", "A disk-based search engine written from scratch in Go.", "vitamin d bone density", "sleep deprivation memory", "antibiotic resistance", "Searching…", "Error: ", "Could not reach the server.", "Show more", "Show less"} {
 		t.Run(want, func(t *testing.T) {
@@ -127,7 +127,7 @@ func TestInstrumentPageCopy(t *testing.T) {
 		})
 	}
 	footer := regexp.MustCompile(`(?is)<footer\b[^>]*>.*?</footer\s*>`).FindString(body)
-	for _, want := range []string{"BEIR", "SciFact", "AI2", "CC BY-NC 2.0"} {
+	for _, want := range []string{"BEIR", "SciFact", "AI2", "CC BY-NC 2.0", "Type: Bricolage Grotesque (SIL OFL 1.1)."} {
 		if !strings.Contains(html.UnescapeString(footer), want) {
 			t.Errorf("footer missing credit %q", want)
 		}
@@ -137,10 +137,15 @@ func TestInstrumentPageCopy(t *testing.T) {
 	}
 }
 
-func TestInstrumentPageTheme(t *testing.T) {
+func TestDaylightPageTheme(t *testing.T) {
 	body := servedPage(t)
+	if regexp.MustCompile(`(?i)prefers-color-scheme`).MatchString(body) {
+		t.Error("light-only page must not contain a prefers-color-scheme query")
+	}
 	for _, tt := range []struct{ name, pattern string }{
-		{"dark theme", `@media\s*[^{}]*\(\s*prefers-color-scheme\s*:\s*dark\s*\)`},
+		{"light theme", `:root\s*\{[^}]*\bcolor-scheme\s*:\s*light\s*(?:;|})`},
+		{"cobalt token", `:root\s*\{[^}]*--cobalt\s*:\s*#2a44ff\s*(?:;|})`},
+		{"mint token", `:root\s*\{[^}]*--mint\s*:\s*#2fd6a3\s*(?:;|})`},
 		{"reduced motion", `@media\s*[^{}]*\(\s*prefers-reduced-motion(?:\s*:\s*reduce)?\s*\)`},
 		{"focus rings", `:focus-visible\b`},
 		{"root custom properties", `:root\s*\{[^}]*--[\w-]+\s*:`},
@@ -154,7 +159,32 @@ func TestInstrumentPageTheme(t *testing.T) {
 	}
 }
 
-func TestInstrumentPageSelfContained(t *testing.T) {
+func TestDaylightPageFont(t *testing.T) {
+	body := servedPage(t)
+	var face string
+	for _, candidate := range regexp.MustCompile(`(?is)@font-face\s*\{[^}]*}`).FindAllString(body, -1) {
+		if regexp.MustCompile(`(?i)font-family\s*:\s*["']Bricolage Grotesque["']\s*(?:;|})`).MatchString(candidate) {
+			face = candidate
+			break
+		}
+	}
+	if face == "" {
+		t.Fatal("missing Bricolage Grotesque @font-face")
+	}
+	for _, tt := range []struct{ name, pattern string }{
+		{"font source", `src\s*:\s*url\(\s*["']/fonts/bricolage-grotesque\.woff2["']\s*\)\s*format\(\s*["']woff2["']\s*\)\s*(?:;|})`},
+		{"variable weights", `font-weight\s*:\s*400\s+800\s*(?:;|})`},
+		{"font display", `font-display\s*:\s*swap\s*(?:;|})`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if !regexp.MustCompile(`(?is)` + tt.pattern).MatchString(face) {
+				t.Errorf("missing %s in Bricolage Grotesque @font-face", tt.name)
+			}
+		})
+	}
+}
+
+func TestDaylightPageSelfContained(t *testing.T) {
 	body := servedPage(t)
 	for _, tag := range regexp.MustCompile(`(?is)<(?:script|link)\b[^>]*>`).FindAllString(body, -1) {
 		if strings.HasPrefix(strings.ToLower(tag), "<script") && pageAttribute(tag, "src") != "" {
@@ -178,7 +208,7 @@ func TestInstrumentPageSelfContained(t *testing.T) {
 	}
 }
 
-func TestInstrumentPageScriptContract(t *testing.T) {
+func TestDaylightPageScriptContract(t *testing.T) {
 	body := servedPage(t)
 	for _, banned := range []string{"innerHTML", "outerHTML", "insertAdjacentHTML", "document.write"} {
 		if strings.Contains(body, banned) {
@@ -200,13 +230,19 @@ func TestInstrumentPageScriptContract(t *testing.T) {
 	}
 }
 
-func TestInstrumentPageNoPurple(t *testing.T) {
+func TestDaylightPageNoPurpleOrOrange(t *testing.T) {
 	body := servedPage(t)
 	// Consume the whole hex token so longer values cannot be mistaken for #rgb.
 	for _, token := range regexp.MustCompile(`(?i)#[0-9a-f]+\b`).FindAllString(body, -1) {
 		hex := token[1:]
-		if len(hex) != 3 && len(hex) != 6 {
+		if len(hex) != 3 && len(hex) != 4 && len(hex) != 6 && len(hex) != 8 {
 			continue
+		}
+		// Ignore alpha when checking the hue of CSS hex colors.
+		if len(hex) == 4 {
+			hex = hex[:3]
+		} else if len(hex) == 8 {
+			hex = hex[:6]
 		}
 		if len(hex) == 3 {
 			hex = strings.Repeat(hex[0:1], 2) + strings.Repeat(hex[1:2], 2) + strings.Repeat(hex[2:3], 2)
@@ -221,7 +257,7 @@ func TestInstrumentPageNoPurple(t *testing.T) {
 		if delta == 0 {
 			continue
 		}
-		// HSL saturation distinguishes muted greys from saturated purple.
+		// HSL saturation distinguishes muted greys from saturated colors.
 		saturation := delta / (1 - math.Abs(high+low-1))
 		var hue float64
 		switch high {
@@ -235,13 +271,16 @@ func TestInstrumentPageNoPurple(t *testing.T) {
 		if hue < 0 {
 			hue += 360
 		}
+		if hue >= 15 && hue <= 45 && saturation > 0.50 {
+			t.Errorf("orange color %s: hue %.1f°, saturation %.1f%%", token, hue, saturation*100)
+		}
 		if hue >= 250 && hue <= 320 && saturation > 0.25 {
 			t.Errorf("purple color %s: hue %.1f°, saturation %.1f%%", token, hue, saturation*100)
 		}
 	}
 }
 
-func TestInstrumentPageAccessibleNames(t *testing.T) {
+func TestDaylightPageAccessibleNames(t *testing.T) {
 	body := servedPage(t)
 	t.Run("single status readout", func(t *testing.T) {
 		count := 0
@@ -269,7 +308,7 @@ func TestInstrumentPageAccessibleNames(t *testing.T) {
 	})
 }
 
-func TestInstrumentPageStopwords(t *testing.T) {
+func TestDaylightPageStopwords(t *testing.T) {
 	body := servedPage(t)
 	declarations := regexp.MustCompile(`(?s)\bconst\s+stopwords\s*=\s*new\s+Set\s*\(\s*\[(.*?)\]\s*\)\s*;`).FindAllStringSubmatch(body, -1)
 	if len(declarations) != 1 {
@@ -314,7 +353,7 @@ func TestInstrumentPageStopwords(t *testing.T) {
 	}
 }
 
-func TestInstrumentPageSafari15APIs(t *testing.T) {
+func TestDaylightPageSafari15APIs(t *testing.T) {
 	body := servedPage(t)
 	for _, banned := range []string{"Object.hasOwn", "requestSubmit"} {
 		t.Run(banned, func(t *testing.T) {

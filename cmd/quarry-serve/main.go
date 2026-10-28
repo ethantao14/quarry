@@ -45,6 +45,9 @@ type textStore interface {
 //go:embed page.html
 var page []byte
 
+//go:embed fonts/bricolage-grotesque-latin.woff2
+var font []byte
+
 var (
 	_ searcher = (*index.Disk)(nil)
 	_ searcher = (*index.Index)(nil)
@@ -193,6 +196,8 @@ func (h *handler) handle(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case "/":
 		handle = servePage
+	case "/fonts/bricolage-grotesque.woff2":
+		handle = serveFont
 	case "/search":
 		handle = h.search
 	case "/healthz":
@@ -312,6 +317,15 @@ func servePage(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(page)
+}
+
+func serveFont(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "font/woff2")
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.WriteHeader(http.StatusOK)
+	if r.Method != http.MethodHead {
+		_, _ = w.Write(font)
+	}
 }
 
 func (h *handler) health(w http.ResponseWriter, r *http.Request) {
