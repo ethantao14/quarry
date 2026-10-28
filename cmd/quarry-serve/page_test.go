@@ -370,16 +370,34 @@ func TestDaylightPageReviewAddendum(t *testing.T) {
 	css := strings.Join(regexp.MustCompile(`(?is)<style\b[^>]*>(.*?)</style\s*>`).FindAllString(body, -1), "\n")
 
 	t.Run("animated latency hidden from screen readers", func(t *testing.T) {
-		if !strings.Contains(script, `"latency"`) {
-			t.Error(`script missing "latency" class`)
+		if count := strings.Count(script, `setAttribute("aria-hidden", "true")`); count < 2 {
+			t.Errorf("script has %d aria-hidden=true calls, want at least 2", count)
 		}
-		if !strings.Contains(script, `setAttribute("aria-hidden", "true")`) {
-			t.Error(`script missing setAttribute("aria-hidden", "true") for animated latency`)
+		// Capture the element identifier, then require that same element to be
+		// hidden directly or by a for...of loop containing it in an array literal.
+		latency := regexp.MustCompile(`\b(?:const|let|var)\s+([\w$]+)\s*=\s*[\w$.]+\([^;\n]*["']latency["'][^;\n]*\)`).FindStringSubmatch(script)
+		if latency == nil {
+			t.Fatal(`script missing element creation with class "latency"`)
+		}
+		hideCall := `\s*\.\s*setAttribute\(\s*["']aria-hidden["']\s*,\s*["']true["']\s*\)`
+		hidden := regexp.MustCompile(`\b` + regexp.QuoteMeta(latency[1]) + hideCall).MatchString(script)
+		for _, loop := range regexp.MustCompile(`(?s)\bfor\s*\(\s*(?:const|let|var)\s+([\w$]+)\s+of\s*\[([^\]]*)\]\s*\)\s*(?:\{([^{}]*)\}|([^;{}]*;))`).FindAllStringSubmatch(script, -1) {
+			for _, element := range strings.Split(loop[2], ",") {
+				if strings.TrimSpace(element) == latency[1] && regexp.MustCompile(`\b`+regexp.QuoteMeta(loop[1])+hideCall).MatchString(loop[3]+loop[4]) {
+					hidden = true
+				}
+			}
+		}
+		if !hidden {
+			t.Errorf("visible latency element %s must have aria-hidden=true", latency[1])
 		}
 	})
 	t.Run("visually hidden status text", func(t *testing.T) {
 		if !strings.Contains(script, `"visually-hidden"`) {
 			t.Error(`script missing "visually-hidden" class for status text`)
+		}
+		if !regexp.MustCompile(`["']Latency ["']\s*\+`).MatchString(script) {
+			t.Error(`script must build status text with the prefix "Latency "`)
 		}
 		if !regexp.MustCompile(`\.visually-hidden\s*\{[^}]*}`).MatchString(css) {
 			t.Error("CSS missing .visually-hidden rule")
@@ -388,6 +406,18 @@ func TestDaylightPageReviewAddendum(t *testing.T) {
 
 	// Restrict declarations to the search input's base and focus rules.
 	searchSelector := `input\[type\s*=\s*["']?search["']?\]`
+	t.Run("search focus-visible forced-colors outline", func(t *testing.T) {
+		rule := regexp.MustCompile(searchSelector + `:focus-visible\s*\{([^}]*)}`).FindStringSubmatch(css)
+		if rule == nil {
+			t.Fatal("CSS missing search input :focus-visible rule")
+		}
+		if !regexp.MustCompile(`(?:^|;)\s*outline\s*:\s*2px\s+solid\s+transparent\s*(?:;|$)`).MatchString(rule[1]) {
+			t.Error("search input :focus-visible must set outline: 2px solid transparent")
+		}
+		if regexp.MustCompile(`(?:^|;)\s*outline\s*:\s*none\s*(?:!important\s*)?(?:;|$)`).MatchString(rule[1]) {
+			t.Error("search input :focus-visible must not set outline: none")
+		}
+	})
 	baseRule := regexp.MustCompile(searchSelector + `\s*\{([^}]*)}`).FindStringSubmatch(css)
 	focusRules := regexp.MustCompile(searchSelector+`:focus(?:-visible)?\s*\{([^}]*)}`).FindAllStringSubmatch(css, -1)
 	var focusCSS string
