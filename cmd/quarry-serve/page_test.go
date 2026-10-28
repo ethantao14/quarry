@@ -363,3 +363,50 @@ func TestDaylightPageSafari15APIs(t *testing.T) {
 		})
 	}
 }
+
+func TestDaylightPageReviewAddendum(t *testing.T) {
+	body := servedPage(t)
+	script := strings.Join(regexp.MustCompile(`(?is)<script\b[^>]*>(.*?)</script\s*>`).FindAllString(body, -1), "\n")
+	css := strings.Join(regexp.MustCompile(`(?is)<style\b[^>]*>(.*?)</style\s*>`).FindAllString(body, -1), "\n")
+
+	t.Run("animated latency hidden from screen readers", func(t *testing.T) {
+		if !strings.Contains(script, `"latency"`) {
+			t.Error(`script missing "latency" class`)
+		}
+		if !strings.Contains(script, `setAttribute("aria-hidden", "true")`) {
+			t.Error(`script missing setAttribute("aria-hidden", "true") for animated latency`)
+		}
+	})
+	t.Run("visually hidden status text", func(t *testing.T) {
+		if !strings.Contains(script, `"visually-hidden"`) {
+			t.Error(`script missing "visually-hidden" class for status text`)
+		}
+		if !regexp.MustCompile(`\.visually-hidden\s*\{[^}]*}`).MatchString(css) {
+			t.Error("CSS missing .visually-hidden rule")
+		}
+	})
+
+	// Restrict declarations to the search input's base and focus rules.
+	searchSelector := `input\[type\s*=\s*["']?search["']?\]`
+	baseRule := regexp.MustCompile(searchSelector + `\s*\{([^}]*)}`).FindStringSubmatch(css)
+	focusRules := regexp.MustCompile(searchSelector+`:focus(?:-visible)?\s*\{([^}]*)}`).FindAllStringSubmatch(css, -1)
+	var focusCSS string
+	for _, rule := range focusRules {
+		focusCSS += rule[1] + ";"
+	}
+	for _, property := range []string{"box-shadow", "background"} {
+		t.Run("search focus "+property, func(t *testing.T) {
+			if !regexp.MustCompile(`(?:^|;)\s*` + property + `\s*:\s*[^;\s][^;]*`).MatchString(focusCSS) {
+				t.Errorf("search input focus rule missing %s", property)
+			}
+		})
+	}
+	t.Run("search base border width", func(t *testing.T) {
+		if baseRule == nil {
+			t.Fatal("CSS missing search input base rule")
+		}
+		if !regexp.MustCompile(`(?:^|;)\s*border-bottom(?:-width)?\s*:\s*4px(?:\s|;|$)`).MatchString(baseRule[1]) {
+			t.Error("search input base rule must set border-bottom width to 4px")
+		}
+	})
+}

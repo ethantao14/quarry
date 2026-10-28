@@ -43,12 +43,14 @@
   input[type=search] {
     width: 100%; min-width: 0; padding: 10px 80px 16px 0;
     font: 800 clamp(30px, 5.6vw, 54px)/1.05 var(--font); letter-spacing: -1.5px;
-    color: var(--fg); background: transparent; border: 0; border-bottom: 3px solid var(--fg); border-radius: 0;
+    color: var(--fg); background: transparent; border: 0; border-bottom: 4px solid var(--fg); border-radius: 0;
   }
   input[type=search]::placeholder { color: var(--muted); opacity: 1; }
-  input[type=search]:focus { border-bottom: 4px solid var(--cobalt); }
-  input[type=search]:focus-visible { outline: none; }
-  .enter-hint { position: absolute; right: 0; top: 50%; transform: translateY(-50%);
+  input[type=search]:focus { border-bottom-color: var(--cobalt); }
+  input[type=search]:focus-visible { outline: none; border-bottom-color: var(--cobalt);
+    background: rgba(42, 68, 255, 0.06); box-shadow: 0 2px 0 var(--cobalt); }
+  /* Offset half the extra bottom padding and border to center on the text. */
+  .enter-hint { position: absolute; right: 0; top: calc(50% - 5px); transform: translateY(-50%);
     pointer-events: none; color: var(--muted); font: 11px var(--mono); }
   .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
   .segments { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; margin: 0; padding: 0; border: 0; }
@@ -56,7 +58,7 @@
   .segments span { display: block; padding: 10px 14px; border-radius: 999px;
     background: var(--card); color: var(--fg); box-shadow: var(--shadow);
     font-size: 12px; font-weight: 600; line-height: 20px; cursor: pointer; }
-  .visually-hidden, .segments input {
+  .segments input, .visually-hidden {
     position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
     overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
   }
@@ -256,7 +258,7 @@ function animateLatency(node, took) {
   node.textContent = "0.00 ms";
   function tick(now) {
     if (!node.isConnected) return;
-    const progress = reducedMotion.matches ? 1 : Math.min(1, (now - start) / 500);
+    const progress = Math.min(1, (now - start) / 500);
     const eased = 1 - Math.pow(1 - progress, 3);
     node.textContent = (took * eased).toFixed(2) + " ms";
     if (progress < 1) requestAnimationFrame(tick);
@@ -269,9 +271,16 @@ function render(data, query) {
   const count = data.results.length;
   const label = count === 1 ? "1 result" : count + " results";
   showStatus("", false);
-  const latency = element("span", "latency", data.took_ms.toFixed(2) + " ms");
-  status.append(latency, element("span", "algorithm", algoNames[data.algo]),
-    element("span", "result-count", label));
+  const time = data.took_ms.toFixed(2) + " ms";
+  const algorithm = element("span", "algorithm", algoNames[data.algo]);
+  const latency = element("span", "latency", time);
+  const resultCount = element("span", "result-count", label);
+  for (const metric of [latency, algorithm, resultCount]) {
+    metric.setAttribute("aria-hidden", "true");
+  }
+  const announcement = element("span", "visually-hidden",
+    "Latency " + time + ", " + algoNames[data.algo] + ", " + label);
+  status.append(latency, algorithm, resultCount, announcement);
   animateLatency(latency, data.took_ms);
   const pattern = queryPattern(query);
   const topScore = data.results.length ? data.results[0].score : 0;
