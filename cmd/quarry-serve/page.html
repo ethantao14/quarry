@@ -6,13 +6,20 @@
 <title>quarry search</title>
 <style>
   :root {
-    --bg: #ffffff; --fg: #1d1f23; --muted: #626872; --line: #dde1e6;
-    --accent: #2457c5; --field: #f5f7fa; --error: #b42318;
+    color-scheme: light;
+    --bg: #f7f7f5; --fg: #252525; --muted: #60605c; --line: #c9c9c3;
+    --accent: #b83b0b; --field: #ffffff; --error: #b42318;
+    --control-line: #85857e; --on-accent: #ffffff; --ok: #237443;
+    --mark: #ffe0ad; --mark-text: #492500;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #15171b; --fg: #e6e8eb; --muted: #9aa1ab; --line: #2c3036;
-      --accent: #7aa2ff; --field: #1e2126; --error: #ff8a80;
+      color-scheme: dark;
+      --bg: #191919; --fg: #eeeeea; --muted: #b1b1a9; --line: #494943;
+      --accent: #fb923c; --field: #242424; --error: #ff9389;
+      --control-line: #85857d; --on-accent: #191919; --ok: #71cf91;
+      --mark: #654019; --mark-text: #fff0d6;
     }
   }
   * { box-sizing: border-box; }
@@ -20,53 +27,121 @@
     margin: 0; background: var(--bg); color: var(--fg);
     font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
   }
-  main { max-width: 760px; margin: 0 auto; padding: 32px 16px 64px; }
-  h1 { margin: 0; font-size: 28px; letter-spacing: -0.5px; }
-  .tagline { margin: 4px 0 24px; color: var(--muted); font-size: 14px; }
-  form { display: flex; flex-wrap: wrap; gap: 8px; }
+  main { max-width: 820px; margin: 0 auto; padding: 32px 16px 56px; }
+  header { border-top: 3px solid var(--fg); padding-top: 16px; }
+  .header-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  h1 { margin: 0; font: bold 30px/1.2 var(--mono); letter-spacing: -1px; }
+  .health { display: flex; align-items: center; gap: 8px; padding: 5px 8px;
+    border: 1px solid var(--line); border-radius: 4px; color: var(--muted); font: 12px var(--mono); }
+  .dot { width: 7px; height: 7px; border-radius: 3px; background: var(--muted); }
+  .health.online .dot { background: var(--ok); }
+  .tagline { margin: 10px 0 24px; color: var(--muted); font-size: 14px; }
+  form { border: 1px solid var(--line); padding: 16px; border-radius: 4px; background: var(--field); }
+  .label { color: var(--muted); font: 11px/1.5 var(--mono); letter-spacing: 1px; text-transform: uppercase; }
+  .query-field { position: relative; margin: 7px 0 14px; }
   input[type=search] {
-    flex: 1 1 280px; min-width: 0; padding: 10px 12px; font: inherit; color: inherit;
-    background: var(--field); border: 1px solid var(--line); border-radius: 8px;
+    width: 100%; min-width: 0; padding: 12px 66px 12px 12px; font: inherit; color: inherit;
+    background: var(--bg); border: 1px solid var(--control-line); border-radius: 3px;
   }
-  select, button {
-    padding: 10px 12px; font: inherit; color: inherit;
-    background: var(--field); border: 1px solid var(--line); border-radius: 8px;
+  .enter-hint { position: absolute; right: 12px; top: 16px; pointer-events: none;
+    color: var(--muted); font: 11px var(--mono); }
+  .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+  .segments { display: flex; min-width: 0; margin: 0; padding: 0; border: 0; }
+  .segments label { position: relative; display: flex; }
+  .segments span { display: block; padding: 10px 9px; border: 1px solid var(--control-line);
+    font: 12px/20px var(--mono); cursor: pointer; }
+  .segments label + label span { border-left: 0; }
+  .segments label:first-of-type span { border-radius: 3px 0 0 3px; }
+  .segments label:last-of-type span { border-radius: 0 3px 3px 0; }
+  .visually-hidden, .segments input {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
   }
-  button { background: var(--accent); border-color: var(--accent); color: #fff; cursor: pointer; }
-  @media (prefers-color-scheme: dark) { button { color: #0d1117; } }
-  input:focus, select:focus, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-  #status { margin: 16px 0 8px; color: var(--muted); font-size: 14px; min-height: 21px; }
+  .segments input:checked + span { background: var(--accent); color: var(--on-accent); }
+  :focus-visible, .segments input:focus-visible + span {
+    outline: 2px solid var(--accent); outline-offset: 3px;
+  }
+  select, button { padding: 10px 12px; font: 12px/20px var(--mono); color: inherit;
+    background: var(--field); border: 1px solid var(--control-line); border-radius: 3px; }
+  button { cursor: pointer; }
+  .submit { margin-left: auto; background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  #status { display: flex; flex-wrap: wrap; align-items: baseline; gap: 16px 28px;
+    padding: 20px 0; min-height: 64px; color: var(--muted); font: 13px/1.5 var(--mono); }
   #status.error { color: var(--error); }
+  .metric { display: flex; flex-direction: column; gap: 4px; }
+  .metric-value { color: var(--fg); }
+  .latency { font-size: 28px; letter-spacing: -1px; }
   ol { list-style: none; margin: 0; padding: 0; }
-  li { padding: 14px 0; border-top: 1px solid var(--line); }
-  .meta { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
-  .title { font-weight: 600; margin: 2px 0; overflow-wrap: anywhere; }
-  .text { margin: 2px 0; white-space: pre-line; overflow-wrap: anywhere; }
-  footer { margin-top: 40px; color: var(--muted); font-size: 13px; }
+  li { display: grid; grid-template-columns: 36px minmax(0, 1fr); gap: 12px;
+    padding: 20px 0; border-top: 1px solid var(--line); }
+  .rank { color: var(--muted); font: 14px/22px var(--mono); }
+  .meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;
+    color: var(--muted); font: 12px/22px var(--mono); overflow-wrap: anywhere; }
+  .score-track { width: 80px; height: 3px; background: var(--line); }
+  .score-bar { display: block; height: 100%; background: var(--accent); }
+  .title { font-weight: 600; margin: 8px 0 4px; overflow-wrap: anywhere; }
+  .text { margin: 4px 0; white-space: pre-line; overflow-wrap: anywhere; }
+  mark { color: var(--mark-text); background: var(--mark); }
+  .more { padding: 2px 0; border: 0; background: none; color: var(--accent); }
+  .examples { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .examples[hidden] { display: none; }
+  .examples button { color: var(--muted); text-align: left; }
+  footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid var(--line);
+    color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
   footer a { color: var(--accent); }
-  .more { padding: 0; border: 0; background: none; color: var(--accent); font-size: 14px; cursor: pointer; }
+  @media (max-width: 540px) {
+    main { padding-top: 20px; }
+    form { padding: 12px; }
+    .segments { width: 100%; }
+    .segments label { flex: 1; }
+    .segments span { width: 100%; padding: 9px 6px; text-align: center; font-size: 11px; }
+    li { grid-template-columns: 26px minmax(0, 1fr); gap: 8px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { transition: none; animation: none; }
+  }
 </style>
 </head>
 <body>
 <main>
-  <h1>quarry</h1>
-  <p class="tagline" id="tagline">A disk-based search engine written from scratch in Go.</p>
+  <header>
+    <div class="header-row">
+      <h1>quarry</h1>
+      <div class="health" id="health" role="status">
+        <span class="dot" aria-hidden="true"></span><span id="documents">— docs</span>
+      </div>
+    </div>
+    <p class="tagline" id="tagline">A disk-based search engine written from scratch in Go.</p>
+  </header>
   <form id="form">
-    <input type="search" id="q" name="q" placeholder="Search" aria-label="Search query"
-           maxlength="1000" autofocus required>
-    <select id="algo" name="algo" aria-label="Retrieval algorithm">
-      <option value="bmw">Block-Max WAND</option>
-      <option value="wand">WAND</option>
-      <option value="exhaustive">Exhaustive</option>
-    </select>
-    <select id="k" name="k" aria-label="Number of results">
-      <option value="10">10 results</option>
-      <option value="50">50 results</option>
-      <option value="100">100 results</option>
-    </select>
-    <button type="submit">Search</button>
+    <label class="label" for="q">Search query</label>
+    <div class="query-field">
+      <input type="search" id="q" name="q" placeholder="Search" aria-label="Search query"
+             maxlength="1000" autofocus required>
+      <span class="enter-hint" aria-hidden="true">⏎ enter</span>
+    </div>
+    <div class="controls">
+      <fieldset class="segments">
+        <legend class="visually-hidden">Retrieval algorithm</legend>
+        <label><input type="radio" name="algo" value="bmw" checked><span>Block-Max WAND</span></label>
+        <label><input type="radio" name="algo" value="wand"><span>WAND</span></label>
+        <label><input type="radio" name="algo" value="exhaustive"><span>Exhaustive</span></label>
+      </fieldset>
+      <select id="k" name="k" aria-label="Number of results">
+        <option value="10">10 results</option>
+        <option value="50">50 results</option>
+        <option value="100">100 results</option>
+      </select>
+      <button class="submit" type="submit">Search</button>
+    </div>
   </form>
-  <p id="status" role="status"></p>
+  <div id="status" role="status"></div>
+  <div class="examples" id="examples">
+    <span class="label">Try</span>
+    <button type="button">vitamin d bone density</button>
+    <button type="button">sleep deprivation memory</button>
+    <button type="button">antibiotic resistance</button>
+  </div>
   <ol id="results"></ol>
   <footer>
     Source and design notes: <a href="https://github.com/ethantao14/quarry">github.com/ethantao14/quarry</a>.
@@ -81,6 +156,7 @@ const snippetChars = 320;
 const form = document.getElementById("form");
 const status = document.getElementById("status");
 const list = document.getElementById("results");
+const examples = document.getElementById("examples");
 
 function element(tag, className, text) {
   const node = document.createElement(tag);
@@ -94,39 +170,93 @@ function showStatus(message, isError) {
   status.classList.toggle("error", isError);
 }
 
-function renderText(item, text) {
+function queryPattern(query) {
+  const words = query.toLowerCase().split(/[^\p{L}\p{N}]+/u);
+  const unique = [...new Set(words.filter((word) => word.length >= 2))];
+  if (unique.length === 0) return null;
+  const escaped = unique.map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  return new RegExp("(^|[^\\p{L}\\p{N}])(" + escaped.join("|") + ")(?=$|[^\\p{L}\\p{N}])", "giu");
+}
+
+function highlight(node, text, pattern) {
+  node.replaceChildren();
+  if (!pattern) {
+    node.textContent = text;
+    return;
+  }
+  pattern.lastIndex = 0;
+  let offset = 0;
+  for (const match of text.matchAll(pattern)) {
+    const start = match.index + match[1].length;
+    node.append(document.createTextNode(text.slice(offset, start)));
+    const mark = document.createElement("mark");
+    mark.textContent = match[2];
+    node.append(mark);
+    offset = start + match[2].length;
+  }
+  node.append(document.createTextNode(text.slice(offset)));
+}
+
+function renderText(item, text, pattern) {
   // Stored BEIR documents have the title on the first line.
   const newline = text.indexOf("\n");
   let body = text;
   if (newline > 0) {
-    item.append(element("div", "title", text.slice(0, newline)));
+    const title = element("div", "title");
+    highlight(title, text.slice(0, newline), pattern);
+    item.append(title);
     body = text.slice(newline + 1);
   }
-  if (body.length <= snippetChars) {
-    item.append(element("p", "text", body));
-    return;
-  }
-  const paragraph = element("p", "text", body.slice(0, snippetChars).trimEnd() + "…");
+  const paragraph = element("p", "text");
+  const preview = body.slice(0, snippetChars).trimEnd() + "…";
+  highlight(paragraph, body.length <= snippetChars ? body : preview, pattern);
+  item.append(paragraph);
+  if (body.length <= snippetChars) return;
   const toggle = element("button", "more", "Show more");
   toggle.type = "button";
+  toggle.setAttribute("aria-expanded", "false");
   toggle.addEventListener("click", () => {
     const expanded = toggle.textContent === "Show less";
-    paragraph.textContent = expanded ? body.slice(0, snippetChars).trimEnd() + "…" : body;
+    highlight(paragraph, expanded ? preview : body, pattern);
     toggle.textContent = expanded ? "Show more" : "Show less";
+    toggle.setAttribute("aria-expanded", String(!expanded));
   });
-  item.append(paragraph, toggle);
+  item.append(toggle);
 }
 
-function render(data) {
+function metric(label, value, className) {
+  const node = element("div", "metric");
+  node.append(element("span", "label", label), element("span", className, value));
+  return node;
+}
+
+function render(data, query) {
   list.replaceChildren();
   const count = data.results.length;
   const label = count === 1 ? "1 result" : count + " results";
-  showStatus(label + " in " + data.took_ms.toFixed(2) + " ms with " + algoNames[data.algo], false);
+  showStatus("", false);
+  status.append(
+    metric("Latency", data.took_ms.toFixed(2) + " ms", "metric-value latency"),
+    metric("Algorithm", algoNames[data.algo], "metric-value"),
+    metric("Retrieved", label, "metric-value")
+  );
+  const pattern = queryPattern(query);
+  const topScore = data.results.length ? data.results[0].score : 0;
   for (const result of data.results) {
     const item = element("li");
-    item.append(element("div", "meta",
-      "#" + result.rank + "  ·  doc " + result.id + "  ·  score " + result.score.toFixed(4)));
-    if (typeof result.text === "string") renderText(item, result.text);
+    const content = element("div", "result-content");
+    const meta = element("div", "meta");
+    const track = element("span", "score-track");
+    track.setAttribute("aria-hidden", "true");
+    const bar = element("span", "score-bar");
+    const ratio = topScore > 0 ? result.score / topScore : 0;
+    bar.style.width = Math.max(0, Math.min(1, ratio)) * 100 + "%";
+    track.append(bar);
+    meta.append(element("span", "score", "score " + result.score.toFixed(4)),
+      track, element("span", "doc", "doc " + result.id));
+    content.append(meta);
+    if (typeof result.text === "string") renderText(content, result.text, pattern);
+    item.append(element("div", "rank", String(result.rank).padStart(2, "0")), content);
     list.append(item);
   }
 }
@@ -136,6 +266,7 @@ let generation = 0;
 
 async function search(params) {
   const current = ++generation;
+  examples.hidden = true;
   showStatus("Searching…", false);
   try {
     const response = await fetch("/search?" + params.toString());
@@ -146,7 +277,7 @@ async function search(params) {
       showStatus("Error: " + data.error, true);
       return;
     }
-    render(data);
+    render(data, params.get("q"));
   } catch (err) {
     if (current !== generation) return;
     list.replaceChildren();
@@ -157,7 +288,7 @@ async function search(params) {
 function paramsFromForm() {
   return new URLSearchParams({
     q: document.getElementById("q").value,
-    algo: document.getElementById("algo").value,
+    algo: document.querySelector('input[name="algo"]:checked').value,
     k: document.getElementById("k").value,
   });
 }
@@ -167,19 +298,21 @@ const defaults = { q: "", algo: "bmw", k: "10" };
 function loadFromURL() {
   // Missing or unknown values fall back to defaults, so a URL always means the same search.
   const params = new URLSearchParams(window.location.search);
-  for (const name of ["q", "algo", "k"]) {
-    const field = document.getElementById(name);
-    const value = params.get(name);
-    const allowed = value !== null &&
-      (name === "q" || field.querySelector("option[value='" + CSS.escape(value) + "']"));
-    field.value = allowed ? value : defaults[name];
+  document.getElementById("q").value = params.get("q") || defaults.q;
+  const algorithm = params.get("algo");
+  const allowedAlgorithm = Object.hasOwn(algoNames, algorithm) ? algorithm : defaults.algo;
+  for (const radio of document.querySelectorAll('input[name="algo"]')) {
+    radio.checked = radio.value === allowedAlgorithm;
   }
+  const limit = params.get("k");
+  document.getElementById("k").value = ["10", "50", "100"].includes(limit) ? limit : defaults.k;
   if (params.get("q")) {
     search(paramsFromForm());
   } else {
     generation++;
     list.replaceChildren();
     showStatus("", false);
+    examples.hidden = false;
   }
 }
 
@@ -192,10 +325,19 @@ form.addEventListener("submit", (event) => {
 });
 window.addEventListener("popstate", loadFromURL);
 
-fetch("/healthz").then((r) => r.json()).then((data) => {
-  document.getElementById("tagline").textContent =
-    "A disk-based search engine written from scratch in Go, searching " +
-    data.documents.toLocaleString() + " documents.";
+for (const button of examples.querySelectorAll("button")) {
+  button.addEventListener("click", () => {
+    document.getElementById("q").value = button.textContent;
+    form.requestSubmit();
+  });
+}
+
+fetch("/healthz").then((response) => {
+  if (!response.ok) throw new Error("Health check failed");
+  return response.json();
+}).then((data) => {
+  document.getElementById("documents").textContent = data.documents.toLocaleString() + " docs";
+  document.getElementById("health").classList.add("online");
 }).catch(() => {});
 loadFromURL();
 </script>

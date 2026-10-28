@@ -112,7 +112,8 @@ curl 'http://127.0.0.1:8080/search?q=red+fish&k=10'
 
 Open `http://127.0.0.1:8080/` in a browser for a search page: type a query, pick the algorithm and
 number of results, and see each result's score and (with `--store-text`) its text, plus the search
-time. The query is kept in the page URL, so a search can be shared or reloaded. The page is built
+time. Each score bar is relative to the top result, and the words you typed are highlighted in the
+text. The query is kept in the page URL, so a search can be shared or reloaded. The page is built
 into the binary and only calls the JSON endpoints below.
 
 The server binds to `127.0.0.1:8080` by default. Set `--addr` to change the listen address;
